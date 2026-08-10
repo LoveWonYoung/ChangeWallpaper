@@ -1,6 +1,5 @@
 package com.example.changewallpaper.ui.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -9,50 +8,56 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
-)
-
-private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
-)
+import com.example.changewallpaper.AccentStyle
+import com.example.changewallpaper.AppThemeMode
 
 @Composable
 fun ChangeWallpaperTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    accentStyle: AccentStyle = AccentStyle.FOREST,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+    val dark = when (themeMode) {
+        AppThemeMode.SYSTEM -> isSystemInDarkTheme()
+        AppThemeMode.LIGHT -> false
+        AppThemeMode.DARK -> true
     }
-
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
+    val context = LocalContext.current
+    val scheme = when {
+        accentStyle == AccentStyle.DYNAMIC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        accentStyle == AccentStyle.OCEAN && dark -> darkColorScheme(
+            primary = OceanDarkPrimary,
+            secondary = Color(0xFFB7C9D7),
+            tertiary = Color(0xFFC2C2EB)
+        )
+        accentStyle == AccentStyle.OCEAN -> lightColorScheme(
+            primary = OceanLightPrimary,
+            secondary = OceanLightSecondary,
+            tertiary = Color(0xFF65587B)
+        )
+        accentStyle == AccentStyle.SUNSET && dark -> darkColorScheme(
+            primary = SunsetDarkPrimary,
+            secondary = Color(0xFFE7BDBF),
+            tertiary = Color(0xFFE8C084)
+        )
+        accentStyle == AccentStyle.SUNSET -> lightColorScheme(
+            primary = SunsetLightPrimary,
+            secondary = SunsetLightSecondary,
+            tertiary = Color(0xFF765A2B)
+        )
+        dark -> darkColorScheme(
+            primary = ForestDarkPrimary,
+            secondary = ForestDarkSecondary,
+            tertiary = Color(0xFFA0CED3)
+        )
+        else -> lightColorScheme(
+            primary = ForestLightPrimary,
+            secondary = ForestLightSecondary,
+            tertiary = ForestLightTertiary
+        )
+    }
+    MaterialTheme(colorScheme = scheme, typography = Typography, content = content)
 }

@@ -2,4 +2,10 @@
 <resources>
 
     <style name="Theme.ChangeWallpaper" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.ChangeWallpaper.Transparent" parent="android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorAccent">#52634F</item>
+    </style>
 </resources>

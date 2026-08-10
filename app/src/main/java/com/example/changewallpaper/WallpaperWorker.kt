@@ -1,15 +1,27 @@
 package com.example.changewallpaper
 
-import android.app.WallpaperManager
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
-import androidx.core.net.toUri
-import androidx.documentfile.provider.DocumentFile
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
+import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
 class WallpaperWorker(
@@ -17,75 +29,181 @@ class WallpaperWorker(
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
 
-    override suspend fun doWork(): Result {
-        val preferences = WallpaperPreferences(applicationContext)
-        val settings = preferences.load()
-        val folderUri = settings.folderUri
-            ?: return failure(preferences, "尚未选择壁纸文件夹")
+    override suspend fun doWork(): Result = workerMutex.withLock {
+        val store = SettingsStore.get(applicationContext)
+        var settings = store.read()
+        val forced = inputData.getBoolean(KEY_FORCED, false)
+        if (!forced && settings.activeHoursEnabled && !isWithinActiveHours(settings)) {
+            return@withLock Result.success(output("当前不在生效时间段"))
+        }
+        if (settings.albums.isEmpty()) {
+            store.update { it.copy(lastError = "尚未添加壁纸相册") }
+            return@withLock Result.failure(output("尚未添加壁纸相册"))
+        }
 
-        return try {
-            val folder = DocumentFile.fromTreeUri(applicationContext, folderUri.toUri())
-                ?: return failure(preferences, "无法打开所选文件夹，请重新选择")
-            val images = folder.listFiles()
-                .filter { it.isFile && isImage(it) }
-                .sortedBy { it.name?.lowercase().orEmpty() }
+        val command = runCatching {
+            RunCommand.valueOf(inputData.getString(KEY_COMMAND) ?: RunCommand.NEXT.name)
+        }.getOrDefault(RunCommand.NEXT)
+        val targets = when (settings.target) {
+            WallpaperTarget.HOME -> listOf(WallpaperTarget.HOME)
+            WallpaperTarget.LOCK -> listOf(WallpaperTarget.LOCK)
+            WallpaperTarget.BOTH -> {
+                if (settings.albumFor(WallpaperTarget.HOME)?.id == settings.albumFor(WallpaperTarget.LOCK)?.id) {
+                    listOf(WallpaperTarget.BOTH)
+                } else listOf(WallpaperTarget.HOME, WallpaperTarget.LOCK)
+            }
+        }
 
+        var lastSuccess: HistoryEntry? = null
+        var failureMessage = ""
+        for (target in targets) {
+            val album = settings.albumFor(target)
+            if (album == null) {
+                failureMessage = "没有为${target.label()}选择相册"
+                continue
+            }
+            val images = try {
+                WallpaperScanner.scan(applicationContext, album)
+            } catch (_: SecurityException) {
+                failureMessage = "相册“${album.name}”访问权限已失效"
+                emptyList()
+            } catch (exception: Exception) {
+                failureMessage = exception.message ?: "无法扫描相册“${album.name}”"
+                emptyList()
+            }
             if (images.isEmpty()) {
-                return failure(preferences, "所选文件夹内没有可用图片")
+                if (failureMessage.isBlank()) failureMessage = "相册“${album.name}”内没有可用图片"
+                continue
             }
 
-            val index = Math.floorMod(settings.currentIndex, images.size)
-            val image = images[index]
-            applicationContext.contentResolver.openInputStream(image.uri).use { stream ->
-                checkNotNull(stream) { "无法读取图片 ${image.name.orEmpty()}" }
-                WallpaperManager.getInstance(applicationContext).setStream(
-                    stream,
-                    null,
-                    true,
-                    settings.target.toWallpaperFlags()
-                )
+            val attempted = mutableSetOf<String>()
+            var applied = false
+            while (attempted.size < images.size) {
+                val choice = SelectionLogic.select(
+                    images = images,
+                    settings = settings.copy(excludedUris = settings.excludedUris + attempted),
+                    albumId = album.id,
+                    command = command
+                ) ?: break
+                attempted += choice.image.uri
+                try {
+                    WallpaperRenderer.apply(applicationContext, choice.image, settings.cropMode, target)
+                    val entry = HistoryEntry(
+                        System.currentTimeMillis(),
+                        choice.image.name,
+                        choice.image.uri,
+                        target,
+                        true
+                    )
+                    settings = store.update { current ->
+                        current.copy(
+                            indexes = current.indexes + (album.id to choice.nextIndex),
+                            recentUris = choice.recentUris,
+                            history = (listOf(entry) + current.history).take(MAX_HISTORY),
+                            lastError = ""
+                        )
+                    }
+                    lastSuccess = entry
+                    applied = true
+                    break
+                } catch (exception: Exception) {
+                    failureMessage = "已跳过 ${choice.image.name}：${exception.message ?: "图片不可用"}"
+                    val failedEntry = HistoryEntry(
+                        System.currentTimeMillis(),
+                        choice.image.name,
+                        choice.image.uri,
+                        target,
+                        false,
+                        failureMessage
+                    )
+                    settings = store.update { current ->
+                        val remainingCount = (images.count { image ->
+                            image.uri !in current.excludedUris && image.uri != choice.image.uri
+                        }).coerceAtLeast(1)
+                        current.copy(
+                            indexes = current.indexes + (album.id to (choice.selectedIndex % remainingCount)),
+                            excludedUris = current.excludedUris + choice.image.uri,
+                            history = (listOf(failedEntry) + current.history).take(MAX_HISTORY),
+                            lastError = failureMessage
+                        )
+                    }
+                }
             }
-            preferences.recordSuccess(
-                nextIndex = (index + 1) % images.size,
-                wallpaperName = image.name ?: "未命名图片"
-            )
-            Result.success()
-        } catch (securityException: SecurityException) {
-            failure(preferences, "文件夹访问权限已失效，请重新选择")
-        } catch (exception: Exception) {
-            val message = exception.message?.takeIf { it.isNotBlank() } ?: "更换壁纸失败"
-            preferences.recordError(message)
-            if (runAttemptCount < 2) Result.retry() else Result.failure()
+            if (!applied && failureMessage.isBlank()) failureMessage = "所有图片都已排除或无法使用"
+        }
+
+        if (lastSuccess != null) {
+            if (settings.notificationsEnabled) showNotification(lastSuccess!!)
+            Result.success(output("已更换为 ${lastSuccess!!.imageName}"))
+        } else {
+            store.update { it.copy(lastError = failureMessage.ifBlank { "更换壁纸失败" }) }
+            Result.failure(output(failureMessage.ifBlank { "更换壁纸失败" }))
         }
     }
 
-    private fun failure(preferences: WallpaperPreferences, message: String): Result {
-        preferences.recordError(message)
-        return Result.failure()
+    private fun isWithinActiveHours(settings: AppSettings): Boolean {
+        val now = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val start = settings.activeStartHour
+        val end = settings.activeEndHour
+        if (start == end) return true
+        return if (start < end) now in start until end else now >= start || now < end
     }
 
-    private fun isImage(file: DocumentFile): Boolean {
-        if (file.type?.startsWith("image/") == true) return true
-        return file.name?.substringAfterLast('.', "")?.lowercase() in IMAGE_EXTENSIONS
+    private fun showNotification(entry: HistoryEntry) {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                applicationContext,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val manager = applicationContext.getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "壁纸更换结果", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            applicationContext,
+            0,
+            Intent(applicationContext, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("壁纸已更换")
+            .setContentText(entry.imageName)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, notification)
     }
 
-    private fun WallpaperTarget.toWallpaperFlags(): Int = when (this) {
-        WallpaperTarget.HOME -> WallpaperManager.FLAG_SYSTEM
-        WallpaperTarget.LOCK -> WallpaperManager.FLAG_LOCK
-        WallpaperTarget.BOTH -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
+    private fun output(message: String) = Data.Builder().putString(KEY_MESSAGE, message).build()
+
+    private fun WallpaperTarget.label(): String = when (this) {
+        WallpaperTarget.HOME -> "主屏幕"
+        WallpaperTarget.LOCK -> "锁定屏幕"
+        WallpaperTarget.BOTH -> "主屏幕和锁屏"
     }
 
-    private companion object {
-        val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "heic", "heif", "bmp")
+    companion object {
+        const val KEY_COMMAND = "command"
+        const val KEY_FORCED = "forced"
+        const val KEY_MESSAGE = "message"
+        private const val MAX_HISTORY = 50
+        private const val CHANNEL_ID = "wallpaper_changes"
+        private const val NOTIFICATION_ID = 7001
+        private val workerMutex = Mutex()
     }
 }
 
 object WallpaperScheduler {
-    private const val PERIODIC_WORK_NAME = "automatic_wallpaper_change"
+    const val PERIODIC_WORK_NAME = "automatic_wallpaper_change"
+    const val IMMEDIATE_WORK_NAME = "immediate_wallpaper_change"
 
     fun start(context: Context, intervalMinutes: Long) {
         val request = PeriodicWorkRequestBuilder<WallpaperWorker>(
-            intervalMinutes,
+            intervalMinutes.coerceAtLeast(15),
             TimeUnit.MINUTES
         ).build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
@@ -99,8 +217,16 @@ object WallpaperScheduler {
         WorkManager.getInstance(context).cancelUniqueWork(PERIODIC_WORK_NAME)
     }
 
-    fun changeNow(context: Context) {
-        WorkManager.getInstance(context)
-            .enqueue(OneTimeWorkRequestBuilder<WallpaperWorker>().build())
+    fun changeNow(context: Context, command: RunCommand = RunCommand.NEXT) {
+        val input = Data.Builder()
+            .putString(WallpaperWorker.KEY_COMMAND, command.name)
+            .putBoolean(WallpaperWorker.KEY_FORCED, true)
+            .build()
+        val request = OneTimeWorkRequestBuilder<WallpaperWorker>().setInputData(input).build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            IMMEDIATE_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
     }
 }

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:targetApi="n_mr1">
+    <shortcut
+        android:shortcutId="change_wallpaper_now"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_change_short"
+        android:shortcutLongLabel="@string/shortcut_change_long">
+        <intent
+            android:action="com.example.changewallpaper.CHANGE_NOW"
+            android:targetPackage="com.example.changewallpaper"
+            android:targetClass="com.example.changewallpaper.QuickActionActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="random_wallpaper_now"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher_round"
+        android:shortcutShortLabel="@string/shortcut_random_short"
+        android:shortcutLongLabel="@string/shortcut_random_long">
+        <intent
+            android:action="com.example.changewallpaper.RANDOM_NOW"
+            android:targetPackage="com.example.changewallpaper"
+            android:targetClass="com.example.changewallpaper.QuickActionActivity" />
+    </shortcut>
+</shortcuts>
