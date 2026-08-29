@@ -10,12 +10,20 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.Rect
+import android.graphics.RectF
 import android.net.Uri
+import android.os.Build
+import android.util.DisplayMetrics
+import android.view.WindowManager
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.InputStream
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -104,6 +112,10 @@ object SelectionLogic {
 }
 
 object WallpaperRenderer {
+    private const val MAX_CANVAS_WIDTH = 1_440
+    private const val MAX_CANVAS_HEIGHT = 3_200
+    private const val MAX_DECODE_PIXELS = 12_000_000L
+
     suspend fun apply(
         context: Context,
         image: WallpaperImage,
@@ -111,16 +123,12 @@ object WallpaperRenderer {
         target: WallpaperTarget
     ) = withContext(Dispatchers.IO) {
         val manager = WallpaperManager.getInstance(context)
-        val metrics = context.resources.displayMetrics
-        val targetWidth = manager.desiredMinimumWidth.takeIf { it > 0 } ?: metrics.widthPixels
-        val targetHeight = manager.desiredMinimumHeight.takeIf { it > 0 } ?: metrics.heightPixels
-        val safeWidth = targetWidth.coerceAtMost(2_560)
-        val safeHeight = targetHeight.coerceAtMost(4_096)
-        val decoded = decodeSampled(context, image.uri.toUri(), safeWidth, safeHeight)
+        val targetSize = resolveTargetSize(context)
+        val decoded = decodeSampled(context, image.uri.toUri(), targetSize.width, targetSize.height)
         try {
-            val rendered = render(decoded, safeWidth, safeHeight, cropMode)
+            val rendered = render(decoded, targetSize.width, targetSize.height, cropMode)
             try {
-                manager.setBitmap(rendered, null, true, target.toFlags())
+                applyRendered(manager, rendered, target)
             } finally {
                 if (rendered !== decoded) rendered.recycle()
             }
@@ -129,18 +137,53 @@ object WallpaperRenderer {
         }
     }
 
+    private fun applyRendered(manager: WallpaperManager, bitmap: Bitmap, target: WallpaperTarget) {
+        val cropHint = Rect(0, 0, bitmap.width, bitmap.height)
+        if (target == WallpaperTarget.BOTH) {
+            manager.setBitmap(bitmap, cropHint, true, WallpaperManager.FLAG_SYSTEM)
+            runCatching {
+                manager.setBitmap(bitmap, cropHint, true, WallpaperManager.FLAG_LOCK)
+            }
+        } else {
+            manager.setBitmap(bitmap, cropHint, true, target.toFlags())
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun resolveTargetSize(context: Context): TargetSize {
+        val windowManager = context.getSystemService(WindowManager::class.java)
+        val (rawWidth, rawHeight) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.maximumWindowMetrics.bounds
+            bounds.width() to bounds.height()
+        } else {
+            val metrics = DisplayMetrics()
+            windowManager.defaultDisplay.getRealMetrics(metrics)
+            metrics.widthPixels to metrics.heightPixels
+        }
+        val width = rawWidth.takeIf { it > 0 } ?: context.resources.displayMetrics.widthPixels
+        val height = rawHeight.takeIf { it > 0 } ?: context.resources.displayMetrics.heightPixels
+        val scale = min(
+            1f,
+            min(
+                MAX_CANVAS_WIDTH.toFloat() / width,
+                MAX_CANVAS_HEIGHT.toFloat() / height
+            )
+        )
+        return TargetSize(
+            width = max(1, (width * scale).roundToInt()),
+            height = max(1, (height * scale).roundToInt())
+        )
+    }
+
     private fun decodeSampled(context: Context, uri: Uri, width: Int, height: Int): Bitmap {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri).use { stream ->
+        openImageStream(context, uri).use { stream ->
             checkNotNull(stream) { "无法读取图片" }
             BitmapFactory.decodeStream(stream, null, bounds)
         }
         check(bounds.outWidth > 0 && bounds.outHeight > 0) { "不是可解码的图片" }
-        var sample = 1
-        while (bounds.outWidth / (sample * 2) >= width && bounds.outHeight / (sample * 2) >= height) {
-            sample *= 2
-        }
-        val bitmap = context.contentResolver.openInputStream(uri).use { stream ->
+        val sample = calculateSampleSize(bounds.outWidth, bounds.outHeight, width, height)
+        val bitmap = openImageStream(context, uri).use { stream ->
             checkNotNull(stream) { "无法读取图片" }
             BitmapFactory.decodeStream(stream, null, BitmapFactory.Options().apply {
                 inSampleSize = sample
@@ -148,7 +191,7 @@ object WallpaperRenderer {
             })
         } ?: error("图片解码失败")
 
-        val orientation = context.contentResolver.openInputStream(uri).use { stream ->
+        val orientation = openImageStream(context, uri).use { stream ->
             if (stream == null) ExifInterface.ORIENTATION_NORMAL
             else runCatching {
                 ExifInterface(stream).getAttributeInt(
@@ -174,23 +217,96 @@ object WallpaperRenderer {
         }
     }
 
+    private fun openImageStream(context: Context, uri: Uri): InputStream? =
+        if (uri.scheme == "file") File(requireNotNull(uri.path)).inputStream()
+        else context.contentResolver.openInputStream(uri)
+
+    internal fun calculateSampleSize(
+        sourceWidth: Int,
+        sourceHeight: Int,
+        targetWidth: Int,
+        targetHeight: Int
+    ): Int {
+        var sample = 1
+        while (
+            sourceWidth / (sample * 2) >= targetWidth &&
+            sourceHeight / (sample * 2) >= targetHeight
+        ) {
+            sample *= 2
+        }
+        while (
+            sourceWidth.toLong() / sample * (sourceHeight.toLong() / sample) > MAX_DECODE_PIXELS
+        ) {
+            sample *= 2
+        }
+        return sample
+    }
+
     private fun render(source: Bitmap, width: Int, height: Int, mode: CropMode): Bitmap {
         val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        if (mode == CropMode.BLUR) {
-            val tinyWidth = max(16, min(64, source.width / 8))
-            val tinyHeight = max(16, min(64, source.height / 8))
-            val tiny = Bitmap.createScaledBitmap(source, tinyWidth, tinyHeight, true)
-            drawScaled(canvas, tiny, width, height, fill = true, paint = paint)
-            tiny.recycle()
-            canvas.drawColor(Color.argb(55, 0, 0, 0))
-            drawScaled(canvas, source, width, height, fill = false, paint = paint)
-        } else {
-            canvas.drawColor(Color.BLACK)
-            drawScaled(canvas, source, width, height, fill = mode == CropMode.FILL, paint = paint)
+        val shouldFill = when (mode) {
+            CropMode.FILL -> true
+            CropMode.FIT, CropMode.BLUR -> false
+            CropMode.SMART -> {
+                val sourceRatio = source.width.toFloat() / source.height
+                val targetRatio = width.toFloat() / height
+                max(sourceRatio, targetRatio) / min(sourceRatio, targetRatio) <= 1.35f
+            }
         }
+        drawSoftBackground(
+            canvas = canvas,
+            source = source,
+            width = width,
+            height = height,
+            darkness = if (mode == CropMode.BLUR) 55 else 20,
+            paint = paint
+        )
+        drawScaled(canvas, source, width, height, fill = shouldFill, paint = paint)
         return output
+    }
+
+    private fun drawSoftBackground(
+        canvas: Canvas,
+        source: Bitmap,
+        width: Int,
+        height: Int,
+        darkness: Int,
+        paint: Paint
+    ) {
+        canvas.drawColor(averageOpaqueColor(source), PorterDuff.Mode.SRC)
+        val tinyWidth = max(12, min(56, source.width / 10))
+        val tinyHeight = max(12, min(56, source.height / 10))
+        val tiny = Bitmap.createScaledBitmap(source, tinyWidth, tinyHeight, true)
+        drawScaled(canvas, tiny, width, height, fill = true, paint = paint)
+        if (tiny !== source) tiny.recycle()
+        if (darkness > 0) canvas.drawColor(Color.argb(darkness, 0, 0, 0))
+    }
+
+    private fun averageOpaqueColor(bitmap: Bitmap): Int {
+        var red = 0L
+        var green = 0L
+        var blue = 0L
+        var count = 0L
+        val stepX = max(1, bitmap.width / 12)
+        val stepY = max(1, bitmap.height / 12)
+        for (y in 0 until bitmap.height step stepY) {
+            for (x in 0 until bitmap.width step stepX) {
+                val pixel = bitmap.getPixel(x, y)
+                if (Color.alpha(pixel) >= 64) {
+                    red += Color.red(pixel)
+                    green += Color.green(pixel)
+                    blue += Color.blue(pixel)
+                    count++
+                }
+            }
+        }
+        return if (count == 0L) Color.rgb(40, 40, 40) else Color.rgb(
+            (red / count).toInt(),
+            (green / count).toInt(),
+            (blue / count).toInt()
+        )
     }
 
     private fun drawScaled(
@@ -206,11 +322,11 @@ object WallpaperRenderer {
         } else {
             min(width.toFloat() / bitmap.width, height.toFloat() / bitmap.height)
         }
-        val drawWidth = (bitmap.width * scale).roundToInt()
-        val drawHeight = (bitmap.height * scale).roundToInt()
-        val left = (width - drawWidth) / 2
-        val top = (height - drawHeight) / 2
-        canvas.drawBitmap(bitmap, null, android.graphics.Rect(left, top, left + drawWidth, top + drawHeight), paint)
+        val drawWidth = bitmap.width * scale
+        val drawHeight = bitmap.height * scale
+        val left = (width - drawWidth) / 2f
+        val top = (height - drawHeight) / 2f
+        canvas.drawBitmap(bitmap, null, RectF(left, top, left + drawWidth, top + drawHeight), paint)
     }
 
     private fun WallpaperTarget.toFlags(): Int = when (this) {
@@ -218,4 +334,6 @@ object WallpaperRenderer {
         WallpaperTarget.LOCK -> WallpaperManager.FLAG_LOCK
         WallpaperTarget.BOTH -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
     }
+
+    private data class TargetSize(val width: Int, val height: Int)
 }

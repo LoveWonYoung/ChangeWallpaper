@@ -1,5 +1,21 @@
 package com.example.changewallpaper
 
+enum class WallpaperSource(val storedValue: String) {
+    NETWORK("network"), LOCAL("local");
+
+    companion object {
+        fun from(value: String?): WallpaperSource = entries.firstOrNull { it.storedValue == value } ?: NETWORK
+    }
+}
+
+enum class NetworkMode(val storedValue: String, val endpoint: String) {
+    CURRENT("current", "current"), NEXT("next", "next"), RANDOM("random", "random");
+
+    companion object {
+        fun from(value: String?): NetworkMode = entries.firstOrNull { it.storedValue == value } ?: CURRENT
+    }
+}
+
 enum class WallpaperTarget(val storedValue: String) {
     HOME("home"), LOCK("lock"), BOTH("both");
 
@@ -17,10 +33,10 @@ enum class RotationMode(val storedValue: String) {
 }
 
 enum class CropMode(val storedValue: String) {
-    FILL("fill"), FIT("fit"), BLUR("blur");
+    SMART("smart"), FILL("fill"), FIT("fit"), BLUR("blur");
 
     companion object {
-        fun from(value: String?): CropMode = entries.firstOrNull { it.storedValue == value } ?: FILL
+        fun from(value: String?): CropMode = entries.firstOrNull { it.storedValue == value } ?: SMART
     }
 }
 
@@ -53,6 +69,18 @@ data class WallpaperImage(
     val name: String
 )
 
+data class NetworkWallpaper(
+    val fileName: String,
+    val thumbnailUrl: String,
+    val imageUrl: String
+)
+
+data class NetworkGalleryState(
+    val isLoading: Boolean = false,
+    val wallpapers: List<NetworkWallpaper> = emptyList(),
+    val error: String = ""
+)
+
 data class HistoryEntry(
     val timestamp: Long,
     val imageName: String,
@@ -63,13 +91,16 @@ data class HistoryEntry(
 )
 
 data class AppSettings(
+    val source: WallpaperSource = WallpaperSource.NETWORK,
+    val networkMode: NetworkMode = NetworkMode.CURRENT,
+    val wifiOnly: Boolean = true,
     val albums: List<WallpaperAlbum> = emptyList(),
     val homeAlbumId: String? = null,
     val lockAlbumId: String? = null,
-    val intervalMinutes: Long = 60,
+    val intervalMinutes: Long = 15,
     val target: WallpaperTarget = WallpaperTarget.BOTH,
     val rotationMode: RotationMode = RotationMode.SEQUENTIAL,
-    val cropMode: CropMode = CropMode.FILL,
+    val cropMode: CropMode = CropMode.SMART,
     val isEnabled: Boolean = false,
     val indexes: Map<String, Int> = emptyMap(),
     val excludedUris: Set<String> = emptySet(),

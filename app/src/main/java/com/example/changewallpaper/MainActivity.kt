@@ -67,6 +67,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.net.toUri
@@ -95,7 +97,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class AppPage(val label: String, val glyph: String) {
-    HOME("主页", "⌂"), ALBUMS("相册", "▦"), HISTORY("历史", "◷"), SETTINGS("设置", "⚙")
+    HOME("主页", "⌂"), ALBUMS("图库", "▦"), HISTORY("历史", "◷"), SETTINGS("设置", "⚙")
 }
 
 private enum class IntervalUnit(val label: String, val minutes: Long) {
@@ -214,6 +216,25 @@ private fun HomePage(
             }
         }
         item {
+            SectionCard("壁纸来源") {
+                ChoiceRow(
+                    values = WallpaperSource.entries,
+                    selected = settings.source,
+                    label = { if (it == WallpaperSource.NETWORK) "网络图库" else "本地相册" },
+                    onSelected = viewModel::setSource
+                )
+                Text(
+                    if (settings.source == WallpaperSource.NETWORK) {
+                        "从 wallpaper.wonyoung.top 获取图片"
+                    } else {
+                        "使用已授权的本地图片文件夹"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        item {
             SectionCard("自动更换") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -223,36 +244,77 @@ private fun HomePage(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            if (settings.albums.isEmpty()) "添加一个相册开始使用"
-                            else "每 ${formatInterval(settings.intervalMinutes)} · ${rotationLabel(settings.rotationMode)}",
+                            when {
+                                settings.source == WallpaperSource.NETWORK ->
+                                    "每 ${formatInterval(settings.intervalMinutes)} · ${networkModeLabel(settings.networkMode)}"
+                                settings.albums.isEmpty() -> "添加一个相册开始使用"
+                                else -> "每 ${formatInterval(settings.intervalMinutes)} · ${rotationLabel(settings.rotationMode)}"
+                            },
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Switch(settings.isEnabled, viewModel::setEnabled)
                 }
                 Spacer(Modifier.height(16.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton({ viewModel.changeNow(RunCommand.PREVIOUS) }, Modifier.weight(1f)) { Text("上一张") }
-                    Button({ viewModel.changeNow(RunCommand.NEXT) }, Modifier.weight(1f)) { Text("下一张") }
-                    OutlinedButton({ viewModel.changeNow(RunCommand.RANDOM) }, Modifier.weight(1f)) { Text("随机") }
+                if (settings.source == WallpaperSource.NETWORK) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button({ viewModel.changeNow() }, Modifier.weight(1f)) { Text("立即更换") }
+                        OutlinedButton({ viewModel.changeNow(RunCommand.RANDOM) }, Modifier.weight(1f)) { Text("随机一张") }
+                    }
+                } else {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton({ viewModel.changeNow(RunCommand.PREVIOUS) }, Modifier.weight(1f)) { Text("上一张") }
+                        Button({ viewModel.changeNow(RunCommand.NEXT) }, Modifier.weight(1f)) { Text("下一张") }
+                        OutlinedButton({ viewModel.changeNow(RunCommand.RANDOM) }, Modifier.weight(1f)) { Text("随机") }
+                    }
+                }
+                settings.history.firstOrNull { it.success }?.let { latest ->
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "上次成功：${formatTime(latest.timestamp)} · ${latest.imageName}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
         item {
-            SectionCard("轮播方式") {
-                ChoiceRow(
-                    values = RotationMode.entries,
-                    selected = settings.rotationMode,
-                    label = ::rotationLabel,
-                    onSelected = viewModel::setRotationMode
-                )
+            SectionCard(if (settings.source == WallpaperSource.NETWORK) "网络模式" else "轮播方式") {
+                if (settings.source == WallpaperSource.NETWORK) {
+                    ChoiceRow(
+                        values = NetworkMode.entries,
+                        selected = settings.networkMode,
+                        label = ::networkModeLabel,
+                        onSelected = viewModel::setNetworkMode
+                    )
+                    Text(
+                        networkModeDescription(settings.networkMode),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    SettingSwitch("仅 Wi-Fi 下载", settings.wifiOnly, viewModel::setWifiOnly)
+                } else {
+                    ChoiceRow(
+                        values = RotationMode.entries,
+                        selected = settings.rotationMode,
+                        label = ::rotationLabel,
+                        onSelected = viewModel::setRotationMode
+                    )
+                }
                 Spacer(Modifier.height(14.dp))
                 Text("图片显示", style = MaterialTheme.typography.labelLarge)
                 ChoiceRow(
                     values = CropMode.entries,
                     selected = settings.cropMode,
-                    label = { when (it) { CropMode.FILL -> "填满"; CropMode.FIT -> "完整"; CropMode.BLUR -> "柔焦背景" } },
+                    label = { cropModeLabel(it) },
                     onSelected = viewModel::setCropMode
+                )
+                Text(
+                    text = cropModeDescription(settings.cropMode),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -268,8 +330,11 @@ private fun HomePage(
             }
         }
         item {
-            SectionCard("壁纸相册") {
-                if (settings.albums.isEmpty()) {
+            SectionCard(if (settings.source == WallpaperSource.NETWORK) "网络图库" else "壁纸相册") {
+                if (settings.source == WallpaperSource.NETWORK) {
+                    val count = uiState.networkGallery.wallpapers.size
+                    Text(if (count == 0) "可浏览服务端提供的全部壁纸" else "服务端图库 · $count 张")
+                } else if (settings.albums.isEmpty()) {
                     Text("还没有相册。选择一个包含图片的文件夹即可开始。")
                 } else {
                     settings.albums.forEach { album ->
@@ -278,7 +343,9 @@ private fun HomePage(
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(openAlbums, Modifier.fillMaxWidth()) { Text("管理相册与预览") }
+                OutlinedButton(openAlbums, Modifier.fillMaxWidth()) {
+                    Text(if (settings.source == WallpaperSource.NETWORK) "浏览网络图库" else "管理相册与预览")
+                }
             }
         }
         if (settings.lastError.isNotBlank()) {
@@ -294,13 +361,73 @@ private fun HomePage(
 @Composable
 private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel, addAlbum: () -> Unit) {
     val settings = uiState.settings
+    var selectedNetworkWallpaper by remember { mutableStateOf<NetworkWallpaper?>(null) }
+    LaunchedEffect(Unit) { viewModel.refreshNetworkGallery() }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            PageTitle("相册", "可添加多个文件夹，并分别指定主屏幕和锁屏来源")
+            PageTitle("图库", "浏览网络图库，或管理本地图片文件夹")
+        }
+        item {
+            SectionCard("网络图库") {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${uiState.networkGallery.wallpapers.size} 张图片",
+                        Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(viewModel::refreshNetworkGallery) { Text("刷新") }
+                }
+                if (uiState.networkGallery.isLoading) {
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                if (uiState.networkGallery.error.isNotBlank()) {
+                    Text(uiState.networkGallery.error, color = MaterialTheme.colorScheme.error)
+                }
+                uiState.networkGallery.wallpapers.chunked(3).forEach { rowImages ->
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        rowImages.forEach { image ->
+                            Column(
+                                Modifier
+                                    .weight(1f)
+                                    .clickable { selectedNetworkWallpaper = image }
+                            ) {
+                                AsyncImage(
+                                    model = image.thumbnailUrl,
+                                    contentDescription = image.fileName,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(108.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                )
+                                Text(
+                                    image.fileName,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                        repeat(3 - rowImages.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+                if (!uiState.networkGallery.isLoading &&
+                    uiState.networkGallery.wallpapers.isEmpty() &&
+                    uiState.networkGallery.error.isBlank()
+                ) {
+                    Text("服务端图库为空")
+                }
+            }
+        }
+        item {
+            PageTitle("本地相册", "可添加多个文件夹，并分别指定主屏幕和锁屏来源")
             Spacer(Modifier.height(14.dp))
             Button(addAlbum, Modifier.fillMaxWidth()) { Text("添加图片文件夹") }
             if (uiState.isScanning) {
@@ -314,6 +441,49 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
         }
         if (settings.albums.isEmpty()) {
             item { EmptyState("还没有相册", "点击上方按钮选择一个图片文件夹") }
+        }
+    }
+    selectedNetworkWallpaper?.let { wallpaper ->
+        NetworkWallpaperPreview(
+            wallpaper = wallpaper,
+            target = settings.target,
+            onDismiss = { selectedNetworkWallpaper = null },
+            onApply = {
+                viewModel.setNetworkWallpaper(wallpaper.fileName)
+                selectedNetworkWallpaper = null
+            }
+        )
+    }
+}
+
+@Composable
+private fun NetworkWallpaperPreview(
+    wallpaper: NetworkWallpaper,
+    target: WallpaperTarget,
+    onDismiss: () -> Unit,
+    onApply: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Card(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            shape = RoundedCornerShape(22.dp)
+        ) {
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
+                Text(wallpaper.fileName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(12.dp))
+                AsyncImage(
+                    model = wallpaper.imageUrl,
+                    contentDescription = wallpaper.fileName,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().weight(1f)
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("将应用到：${targetLabel(target)}", style = MaterialTheme.typography.bodySmall)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onDismiss, Modifier.weight(1f)) { Text("关闭") }
+                    Button(onApply, Modifier.weight(1f)) { Text("设为壁纸") }
+                }
+            }
         }
     }
 }
@@ -595,10 +765,36 @@ private fun rotationLabel(mode: RotationMode) = when (mode) {
     RotationMode.SHUFFLE -> "随机不重复"
 }
 
+private fun networkModeLabel(mode: NetworkMode) = when (mode) {
+    NetworkMode.CURRENT -> "同步（推荐）"
+    NetworkMode.NEXT -> "独立轮换"
+    NetworkMode.RANDOM -> "随机"
+}
+
+private fun networkModeDescription(mode: NetworkMode) = when (mode) {
+    NetworkMode.CURRENT -> "所有设备在同一 15 分钟窗口使用同一张图片"
+    NetworkMode.NEXT -> "使用服务端共享队列，适合只有一台设备的场景"
+    NetworkMode.RANDOM -> "每次从服务端随机获取一张图片"
+}
+
 private fun targetLabel(target: WallpaperTarget) = when (target) {
     WallpaperTarget.HOME -> "主屏幕"
     WallpaperTarget.LOCK -> "锁定屏幕"
     WallpaperTarget.BOTH -> "主屏幕和锁屏"
+}
+
+private fun cropModeLabel(mode: CropMode) = when (mode) {
+    CropMode.SMART -> "智能"
+    CropMode.FILL -> "居中裁剪"
+    CropMode.FIT -> "完整显示"
+    CropMode.BLUR -> "柔焦背景"
+}
+
+private fun cropModeDescription(mode: CropMode) = when (mode) {
+    CropMode.SMART -> "根据图片与屏幕方向自动选择裁剪或柔焦补边"
+    CropMode.FILL -> "填满整个屏幕，超出部分从中心裁剪，不产生黑边"
+    CropMode.FIT -> "保留完整图片，空余区域使用图片边缘柔焦填充"
+    CropMode.BLUR -> "完整显示主体，并使用更明显的柔焦背景填满屏幕"
 }
 
 private fun displayInterval(minutes: Long): Pair<Long, IntervalUnit> = when {

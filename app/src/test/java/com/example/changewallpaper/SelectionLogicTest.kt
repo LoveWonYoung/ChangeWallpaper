@@ -55,4 +55,11 @@ class SelectionLogicTest {
         val settings = AppSettings(excludedUris = images.map { it.uri }.toSet())
         assertNull(SelectionLogic.select(images, settings, album.id, RunCommand.NEXT))
     }
+
+    @Test
+    fun largeImagesAreSampledWithoutDroppingBelowUsefulResolution() {
+        assertEquals(2, WallpaperRenderer.calculateSampleSize(8_000, 6_000, 1_080, 2_400))
+        assertEquals(2, WallpaperRenderer.calculateSampleSize(20_000, 2_000, 1_080, 2_400))
+        assertEquals(1, WallpaperRenderer.calculateSampleSize(1_080, 2_400, 1_080, 2_400))
+    }
 }

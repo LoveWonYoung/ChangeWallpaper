@@ -7,21 +7,26 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.NetworkType
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.Calendar
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class WallpaperWorker(
@@ -33,8 +38,15 @@ class WallpaperWorker(
         val store = SettingsStore.get(applicationContext)
         var settings = store.read()
         val forced = inputData.getBoolean(KEY_FORCED, false)
+        if (!forced && !settings.isEnabled) {
+            return@withLock Result.success(output("自动更换已关闭"))
+        }
         if (!forced && settings.activeHoursEnabled && !isWithinActiveHours(settings)) {
             return@withLock Result.success(output("当前不在生效时间段"))
+        }
+        val networkFileName = inputData.getString(KEY_NETWORK_FILE)
+        if (networkFileName != null || settings.source == WallpaperSource.NETWORK) {
+            return@withLock changeNetworkWallpaper(store, settings, networkFileName)
         }
         if (settings.albums.isEmpty()) {
             store.update { it.copy(lastError = "尚未添加壁纸相册") }
@@ -141,6 +153,63 @@ class WallpaperWorker(
         }
     }
 
+    private suspend fun changeNetworkWallpaper(
+        store: SettingsStore,
+        settings: AppSettings,
+        fileName: String?
+    ): Result {
+        if (settings.wifiOnly && !hasUnmeteredNetwork()) {
+            return Result.retry()
+        }
+        val command = runCatching {
+            RunCommand.valueOf(inputData.getString(KEY_COMMAND) ?: RunCommand.NEXT.name)
+        }.getOrDefault(RunCommand.NEXT)
+        val mode = if (command == RunCommand.RANDOM) NetworkMode.RANDOM else settings.networkMode
+        return try {
+            val downloaded = if (fileName == null) {
+                NetworkWallpaperClient.downloadCurrent(applicationContext, mode)
+            } else {
+                NetworkWallpaperClient.downloadGalleryImage(applicationContext, fileName)
+            }
+            WallpaperRenderer.apply(applicationContext, downloaded.image, settings.cropMode, settings.target)
+            val entry = HistoryEntry(
+                timestamp = System.currentTimeMillis(),
+                imageName = downloaded.image.name,
+                imageUri = downloaded.historyUrl,
+                target = settings.target,
+                success = true
+            )
+            store.update { current ->
+                current.copy(
+                    history = (listOf(entry) + current.history).take(MAX_HISTORY),
+                    lastError = ""
+                )
+            }
+            if (settings.notificationsEnabled) showNotification(entry)
+            Result.success(output("已从网络更换为 ${entry.imageName}"))
+        } catch (exception: WallpaperHttpException) {
+            recordNetworkFailure(store, exception.message ?: "网络壁纸请求失败")
+            if (exception.retryable) Result.retry()
+            else Result.failure(output(exception.message ?: "网络壁纸请求失败"))
+        } catch (exception: IOException) {
+            recordNetworkFailure(store, "网络连接失败，稍后重试")
+            Result.retry()
+        } catch (exception: Exception) {
+            val message = exception.message ?: "网络图片无法使用"
+            recordNetworkFailure(store, message)
+            if (runAttemptCount < 1) Result.retry() else Result.failure(output(message))
+        }
+    }
+
+    private suspend fun recordNetworkFailure(store: SettingsStore, message: String) {
+        store.update { it.copy(lastError = message) }
+    }
+
+    private fun hasUnmeteredNetwork(): Boolean {
+        val manager = applicationContext.getSystemService(ConnectivityManager::class.java)
+        return manager.activeNetwork != null && !manager.isActiveNetworkMetered
+    }
+
     private fun isWithinActiveHours(settings: AppSettings): Boolean {
         val now = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         val start = settings.activeStartHour
@@ -190,6 +259,7 @@ class WallpaperWorker(
         const val KEY_COMMAND = "command"
         const val KEY_FORCED = "forced"
         const val KEY_MESSAGE = "message"
+        const val KEY_NETWORK_FILE = "network_file"
         private const val MAX_HISTORY = 50
         private const val CHANNEL_ID = "wallpaper_changes"
         private const val NOTIFICATION_ID = 7001
@@ -201,11 +271,19 @@ object WallpaperScheduler {
     const val PERIODIC_WORK_NAME = "automatic_wallpaper_change"
     const val IMMEDIATE_WORK_NAME = "immediate_wallpaper_change"
 
-    fun start(context: Context, intervalMinutes: Long) {
+    fun start(
+        context: Context,
+        intervalMinutes: Long,
+        source: WallpaperSource,
+        wifiOnly: Boolean
+    ) {
         val request = PeriodicWorkRequestBuilder<WallpaperWorker>(
             intervalMinutes.coerceAtLeast(15),
             TimeUnit.MINUTES
-        ).build()
+        )
+            .setConstraints(networkConstraints(source == WallpaperSource.NETWORK, wifiOnly))
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
+            .build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             PERIODIC_WORK_NAME,
             ExistingPeriodicWorkPolicy.UPDATE,
@@ -217,16 +295,39 @@ object WallpaperScheduler {
         WorkManager.getInstance(context).cancelUniqueWork(PERIODIC_WORK_NAME)
     }
 
-    fun changeNow(context: Context, command: RunCommand = RunCommand.NEXT) {
+    fun changeNow(
+        context: Context,
+        command: RunCommand = RunCommand.NEXT,
+        source: WallpaperSource = WallpaperSource.LOCAL,
+        wifiOnly: Boolean = false,
+        networkFileName: String? = null
+    ) {
         val input = Data.Builder()
             .putString(WallpaperWorker.KEY_COMMAND, command.name)
             .putBoolean(WallpaperWorker.KEY_FORCED, true)
+            .apply { networkFileName?.let { putString(WallpaperWorker.KEY_NETWORK_FILE, it) } }
             .build()
-        val request = OneTimeWorkRequestBuilder<WallpaperWorker>().setInputData(input).build()
+        val needsNetwork = source == WallpaperSource.NETWORK || networkFileName != null
+        val request = OneTimeWorkRequestBuilder<WallpaperWorker>()
+            .setInputData(input)
+            .setConstraints(networkConstraints(needsNetwork, wifiOnly))
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
+            .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             IMMEDIATE_WORK_NAME,
             ExistingWorkPolicy.REPLACE,
             request
         )
     }
+
+    private fun networkConstraints(needsNetwork: Boolean, wifiOnly: Boolean): Constraints =
+        Constraints.Builder()
+            .setRequiredNetworkType(
+                when {
+                    !needsNetwork -> NetworkType.NOT_REQUIRED
+                    wifiOnly -> NetworkType.UNMETERED
+                    else -> NetworkType.CONNECTED
+                }
+            )
+            .build()
 }

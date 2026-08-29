@@ -35,6 +35,7 @@ class SettingsStore private constructor(private val context: Context) {
                 WallpaperAlbum(UUID.randomUUID().toString(), name.ifBlank { "壁纸相册" }, it)
             }
             val migrated = AppSettings(
+                source = if (album == null) WallpaperSource.NETWORK else WallpaperSource.LOCAL,
                 albums = listOfNotNull(album),
                 homeAlbumId = album?.id,
                 lockAlbumId = album?.id,
@@ -72,7 +73,10 @@ class SettingsStore private constructor(private val context: Context) {
     suspend fun exportJson(): String = encode(read())
 
     private fun encode(settings: AppSettings): String = JSONObject().apply {
-        put("version", 2)
+        put("version", 3)
+        put("source", settings.source.storedValue)
+        put("networkMode", settings.networkMode.storedValue)
+        put("wifiOnly", settings.wifiOnly)
         put("albums", JSONArray().apply {
             settings.albums.forEach { album ->
                 put(JSONObject().apply {
@@ -129,10 +133,19 @@ class SettingsStore private constructor(private val context: Context) {
             val indexesJson = json.optJSONObject("indexes") ?: JSONObject()
             val indexes = indexesJson.keys().asSequence().associateWith { indexesJson.optInt(it, 0) }
             AppSettings(
+                source = if (json.has("source")) {
+                    WallpaperSource.from(json.optString("source"))
+                } else if (albums.isNotEmpty()) {
+                    WallpaperSource.LOCAL
+                } else {
+                    WallpaperSource.NETWORK
+                },
+                networkMode = NetworkMode.from(json.optString("networkMode")),
+                wifiOnly = json.optBoolean("wifiOnly", true),
                 albums = albums,
                 homeAlbumId = json.optNullableString("homeAlbumId"),
                 lockAlbumId = json.optNullableString("lockAlbumId"),
-                intervalMinutes = json.optLong("intervalMinutes", 60).coerceAtLeast(15),
+                intervalMinutes = json.optLong("intervalMinutes", 15).coerceAtLeast(15),
                 target = WallpaperTarget.from(json.optString("target")),
                 rotationMode = RotationMode.from(json.optString("rotationMode")),
                 cropMode = CropMode.from(json.optString("cropMode")),
