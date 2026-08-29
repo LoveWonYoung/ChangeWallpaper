@@ -388,7 +388,7 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
                 if (uiState.networkGallery.error.isNotBlank()) {
                     Text(uiState.networkGallery.error, color = MaterialTheme.colorScheme.error)
                 }
-                uiState.networkGallery.wallpapers.chunked(3).forEach { rowImages ->
+                uiState.networkGallery.wallpapers.chunked(5).forEach { rowImages ->
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         rowImages.forEach { image ->
@@ -415,7 +415,7 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
                                 )
                             }
                         }
-                        repeat(3 - rowImages.size) { Spacer(Modifier.weight(1f)) }
+                        repeat(5 - rowImages.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
                 if (!uiState.networkGallery.isLoading &&
@@ -508,7 +508,7 @@ private fun AlbumCard(
         }
         if (images.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            images.take(30).chunked(3).forEach { rowImages ->
+            images.take(30).chunked(5).forEach { rowImages ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     rowImages.forEach { image ->
                         val excluded = image.uri in settings.excludedUris
@@ -536,7 +536,7 @@ private fun AlbumCard(
                             )
                         }
                     }
-                    repeat(3 - rowImages.size) { Spacer(Modifier.weight(1f)) }
+                    repeat(5 - rowImages.size) { Spacer(Modifier.weight(1f)) }
                 }
                 Spacer(Modifier.height(8.dp))
             }
