@@ -101,7 +101,11 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class AppPage(val label: String, val glyph: String) {
-    HOME("主页", "⌂"), ALBUMS("图库", "▦"), HISTORY("历史", "◷"), SETTINGS("设置", "⚙")
+    HOME("主页", "⌂"),
+    ALBUMS("相册", "▣"),
+    NETWORK_ALBUMS("网络", "▦"),
+    HISTORY("历史", "◷"),
+    SETTINGS("设置", "⚙")
 }
 
 private enum class IntervalUnit(val label: String, val minutes: Long) {
@@ -186,8 +190,15 @@ private fun WallpaperApp(uiState: WallpaperUiState, viewModel: WallpaperViewMode
                 .padding(padding)
         ) {
             when (page) {
-                AppPage.HOME -> HomePage(uiState, viewModel) { page = AppPage.ALBUMS }
+                AppPage.HOME -> HomePage(uiState, viewModel) {
+                    page = if (uiState.settings.source == WallpaperSource.NETWORK) {
+                        AppPage.NETWORK_ALBUMS
+                    } else {
+                        AppPage.ALBUMS
+                    }
+                }
                 AppPage.ALBUMS -> AlbumsPage(uiState, viewModel) { folderLauncher.launch(null) }
+                AppPage.NETWORK_ALBUMS -> NetworkAlbumsPage(uiState, viewModel)
                 AppPage.HISTORY -> HistoryPage(uiState.settings, viewModel)
                 AppPage.SETTINGS -> SettingsPage(
                     settings = uiState.settings,
@@ -385,6 +396,33 @@ private fun HomePage(
 @Composable
 private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel, addAlbum: () -> Unit) {
     val settings = uiState.settings
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            PageTitle("本地相册", "添加图片文件夹，并分别指定主屏幕和锁屏来源")
+            Spacer(Modifier.height(14.dp))
+            Button(addAlbum, Modifier.fillMaxWidth()) { Text("添加图片文件夹") }
+            if (uiState.isScanning) {
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+        }
+        items(settings.albums, key = { it.id }) { album ->
+            val images = uiState.imagesByAlbum[album.id].orEmpty()
+            AlbumCard(album, images, settings, viewModel)
+        }
+        if (settings.albums.isEmpty()) {
+            item { EmptyState("还没有相册", "点击上方按钮选择一个图片文件夹") }
+        }
+    }
+}
+
+@Composable
+private fun NetworkAlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel) {
+    val settings = uiState.settings
     var selectedNetworkWallpaper by remember { mutableStateOf<NetworkWallpaper?>(null) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -399,14 +437,15 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            PageTitle("图库", "浏览网络图库，或管理本地图片文件夹")
+            PageTitle("网络相册", "浏览服务端相册，选择并预览喜欢的壁纸")
         }
         item {
-            SectionCard("网络图库") {
+            SectionCard(if (uiState.selectedNetworkAlbum == null) "全部相册" else "相册图片") {
                 val selectedAlbum = uiState.selectedNetworkAlbum
                 if (selectedAlbum == null) {
                     NetworkAlbumsContent(
                         state = uiState.networkAlbums,
+                        columns = settings.galleryColumns,
                         onRefresh = viewModel::refreshNetworkAlbums,
                         onOpen = { album ->
                             viewModel.openNetworkAlbum(album)
@@ -417,6 +456,7 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
                     NetworkAlbumContent(
                         album = selectedAlbum,
                         gallery = uiState.networkGallery,
+                        columns = settings.galleryColumns,
                         onBack = viewModel::closeNetworkAlbum,
                         onRefresh = viewModel::refreshNetworkGallery,
                         onPreviousPage = {
@@ -431,22 +471,6 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
                     )
                 }
             }
-        }
-        item {
-            PageTitle("本地相册", "可添加多个文件夹，并分别指定主屏幕和锁屏来源")
-            Spacer(Modifier.height(14.dp))
-            Button(addAlbum, Modifier.fillMaxWidth()) { Text("添加图片文件夹") }
-            if (uiState.isScanning) {
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-            }
-        }
-        items(settings.albums, key = { it.id }) { album ->
-            val images = uiState.imagesByAlbum[album.id].orEmpty()
-            AlbumCard(album, images, settings, viewModel)
-        }
-        if (settings.albums.isEmpty()) {
-            item { EmptyState("还没有相册", "点击上方按钮选择一个图片文件夹") }
         }
     }
     selectedNetworkWallpaper?.let { wallpaper ->
@@ -465,6 +489,7 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
 @Composable
 private fun NetworkAlbumsContent(
     state: NetworkAlbumsState,
+    columns: Int,
     onRefresh: () -> Unit,
     onOpen: (NetworkAlbum) -> Unit
 ) {
@@ -484,14 +509,14 @@ private fun NetworkAlbumsContent(
         Spacer(Modifier.height(8.dp))
         Text(state.error, color = MaterialTheme.colorScheme.error)
     }
-    state.albums.chunked(2).forEach { rowAlbums ->
+    state.albums.chunked(columns).forEach { rowAlbums ->
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             rowAlbums.forEach { album ->
                 Box(
                     Modifier
                         .weight(1f)
-                        .height(190.dp)
+                        .height(galleryTileHeight(columns))
                         .clip(RoundedCornerShape(20.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                         .clickable { onOpen(album) }
@@ -524,7 +549,7 @@ private fun NetworkAlbumsContent(
                     }
                 }
             }
-            repeat(2 - rowAlbums.size) { Spacer(Modifier.weight(1f)) }
+            repeat(columns - rowAlbums.size) { Spacer(Modifier.weight(1f)) }
         }
     }
     if (!state.isLoading && state.albums.isEmpty() && state.error.isBlank()) {
@@ -537,6 +562,7 @@ private fun NetworkAlbumsContent(
 private fun NetworkAlbumContent(
     album: NetworkAlbum,
     gallery: NetworkGalleryState,
+    columns: Int,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onPreviousPage: () -> Unit,
@@ -564,14 +590,14 @@ private fun NetworkAlbumContent(
         Spacer(Modifier.height(8.dp))
         Text(gallery.error, color = MaterialTheme.colorScheme.error)
     }
-    gallery.wallpapers.chunked(2).forEach { rowImages ->
+    gallery.wallpapers.chunked(columns).forEach { rowImages ->
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             rowImages.forEach { image ->
                 Box(
                     Modifier
                         .weight(1f)
-                        .height(190.dp)
+                        .height(galleryTileHeight(columns))
                         .clip(RoundedCornerShape(20.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                         .clickable { onOpenImage(image) }
@@ -601,7 +627,7 @@ private fun NetworkAlbumContent(
                     )
                 }
             }
-            repeat(2 - rowImages.size) { Spacer(Modifier.weight(1f)) }
+            repeat(columns - rowImages.size) { Spacer(Modifier.weight(1f)) }
         }
     }
     if (gallery.totalCount > 0) {
@@ -683,14 +709,14 @@ private fun AlbumCard(
         }
         if (images.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            images.take(30).chunked(2).forEach { rowImages ->
+            images.take(settings.galleryPageSize).chunked(settings.galleryColumns).forEach { rowImages ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     rowImages.forEach { image ->
                         val excluded = image.uri in settings.excludedUris
                         Box(
                             Modifier
                                 .weight(1f)
-                                .height(170.dp)
+                                .height(galleryTileHeight(settings.galleryColumns))
                                 .clip(RoundedCornerShape(20.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .clickable { viewModel.toggleExcluded(image) }
@@ -724,11 +750,13 @@ private fun AlbumCard(
                             )
                         }
                     }
-                    repeat(2 - rowImages.size) { Spacer(Modifier.weight(1f)) }
+                    repeat(settings.galleryColumns - rowImages.size) { Spacer(Modifier.weight(1f)) }
                 }
                 Spacer(Modifier.height(10.dp))
             }
-            if (images.size > 30) Text("仅预览前 30 张，轮播会使用全部图片")
+            if (images.size > settings.galleryPageSize) {
+                Text("仅预览前 ${settings.galleryPageSize} 张，轮播会使用全部图片")
+            }
             Text("点击图片可排除或恢复", style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.height(10.dp))
@@ -802,8 +830,23 @@ private fun SettingsPage(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item { PageTitle("设置", "时间段、通知、外观、快捷方式和备份") }
+        item { PageTitle("设置", "图库、时间段、通知、外观、快捷方式和备份") }
         item { ActiveHoursCard(settings, viewModel) }
+        item {
+            SectionCard("图库布局") {
+                Text("每行列数", style = MaterialTheme.typography.labelLarge)
+                ChoiceRow(listOf(2, 3, 4), settings.galleryColumns, { "$it 列" }, viewModel::setGalleryColumns)
+                Spacer(Modifier.height(12.dp))
+                Text("每页行数", style = MaterialTheme.typography.labelLarge)
+                ChoiceRow((3..8).toList(), settings.galleryRows, { "$it 行" }, viewModel::setGalleryRows)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "当前每页 ${settings.galleryRows} × ${settings.galleryColumns}，共 ${settings.galleryPageSize} 张图片。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
         item {
             SectionCard("通知与后台") {
                 SettingSwitch("更换成功后通知", settings.notificationsEnabled) { enabled ->
@@ -908,6 +951,12 @@ private fun SettingSwitch(label: String, checked: Boolean, onChecked: (Boolean) 
         Text(label, Modifier.weight(1f))
         Switch(checked, onChecked)
     }
+}
+
+private fun galleryTileHeight(columns: Int) = when (columns) {
+    2 -> 190.dp
+    3 -> 138.dp
+    else -> 108.dp
 }
 
 @Composable

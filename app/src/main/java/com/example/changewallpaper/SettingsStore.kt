@@ -73,9 +73,11 @@ class SettingsStore private constructor(private val context: Context) {
     suspend fun exportJson(): String = encode(read())
 
     private fun encode(settings: AppSettings): String = JSONObject().apply {
-        put("version", 4)
+        put("version", 5)
         put("source", settings.source.storedValue)
         put("networkMode", settings.networkMode.storedValue)
+        put("galleryColumns", settings.galleryColumns)
+        put("galleryRows", settings.galleryRows)
         put("albums", JSONArray().apply {
             settings.albums.forEach { album ->
                 put(JSONObject().apply {
@@ -145,6 +147,8 @@ class SettingsStore private constructor(private val context: Context) {
                     WallpaperSource.NETWORK
                 },
                 networkMode = NetworkMode.from(json.optString("networkMode")),
+                galleryColumns = json.optInt("galleryColumns", 3).coerceIn(2, 4),
+                galleryRows = json.optInt("galleryRows", 6).coerceIn(3, 8),
                 albums = albums,
                 homeAlbumId = json.optNullableString("homeAlbumId"),
                 lockAlbumId = json.optNullableString("lockAlbumId"),

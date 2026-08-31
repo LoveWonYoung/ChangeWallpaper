@@ -134,6 +134,8 @@ data class HistoryEntry(
 data class AppSettings(
     val source: WallpaperSource = WallpaperSource.NETWORK,
     val networkMode: NetworkMode = NetworkMode.CURRENT,
+    val galleryColumns: Int = 3,
+    val galleryRows: Int = 6,
     val albums: List<WallpaperAlbum> = emptyList(),
     val homeAlbumId: String? = null,
     val lockAlbumId: String? = null,
@@ -154,6 +156,9 @@ data class AppSettings(
     val accentStyle: AccentStyle = AccentStyle.FOREST,
     val lastError: String = ""
 ) {
+    val galleryPageSize: Int
+        get() = galleryColumns.coerceIn(2, 4) * galleryRows.coerceIn(3, 8)
+
     fun albumFor(target: WallpaperTarget): WallpaperAlbum? {
         val id = when (target) {
             WallpaperTarget.HOME -> homeAlbumId ?: albums.firstOrNull()?.id

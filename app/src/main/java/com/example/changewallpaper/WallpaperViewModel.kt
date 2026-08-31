@@ -134,6 +134,22 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     fun setNotifications(enabled: Boolean) = update { it.copy(notificationsEnabled = enabled) }
     fun setTheme(mode: AppThemeMode) = update { it.copy(themeMode = mode) }
     fun setAccent(style: AccentStyle) = update { it.copy(accentStyle = style) }
+    fun setGalleryColumns(value: Int) = updateGalleryLayout {
+        it.copy(galleryColumns = value.coerceIn(2, 4))
+    }
+
+    fun setGalleryRows(value: Int) = updateGalleryLayout {
+        it.copy(galleryRows = value.coerceIn(3, 8))
+    }
+
+    private fun updateGalleryLayout(transform: (AppSettings) -> AppSettings) {
+        viewModelScope.launch {
+            val updated = store.update(transform)
+            _networkGallery.value = NetworkGalleryState(pageSize = updated.galleryPageSize)
+            publish()
+            if (_selectedNetworkAlbum.value != null) loadNetworkGalleryPage(offset = 0)
+        }
+    }
 
     fun setEnabled(enabled: Boolean) {
         viewModelScope.launch {
@@ -233,14 +249,14 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun openNetworkAlbum(album: NetworkAlbum) {
         _selectedNetworkAlbum.value = album
-        _networkGallery.value = NetworkGalleryState(pageSize = _networkGallery.value.pageSize)
+        _networkGallery.value = NetworkGalleryState(pageSize = _settings.value.galleryPageSize)
         publish()
         loadNetworkGalleryPage(offset = 0)
     }
 
     fun closeNetworkAlbum() {
         _selectedNetworkAlbum.value = null
-        _networkGallery.value = NetworkGalleryState(pageSize = _networkGallery.value.pageSize)
+        _networkGallery.value = NetworkGalleryState(pageSize = _settings.value.galleryPageSize)
         publish()
     }
 
@@ -270,7 +286,9 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             runCatching { NetworkWallpaperClient.fetchGalleryPage(offset, pageSize, album.name) }
                 .onSuccess { page ->
-                    if (_selectedNetworkAlbum.value?.name != album.name) return@onSuccess
+                    if (_selectedNetworkAlbum.value?.name != album.name ||
+                        _networkGallery.value.pageSize != pageSize
+                    ) return@onSuccess
                     _networkGallery.value = NetworkGalleryState(
                         wallpapers = page.fileNames.map(NetworkWallpaperClient::galleryItem),
                         totalCount = page.total,
@@ -280,7 +298,9 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
                 .onFailure { exception ->
-                    if (_selectedNetworkAlbum.value?.name != album.name) return@onFailure
+                    if (_selectedNetworkAlbum.value?.name != album.name ||
+                        _networkGallery.value.pageSize != pageSize
+                    ) return@onFailure
                     _networkGallery.value = _networkGallery.value.copy(
                         isLoading = false,
                         error = exception.message ?: "无法加载网络图库"

@@ -26,4 +26,13 @@ class NetworkGalleryStateTest {
         assertFalse(state.hasPreviousPage)
         assertFalse(state.hasNextPage)
     }
+
+    @Test
+    fun `gallery layout controls page size`() {
+        val compact = AppSettings(galleryColumns = 3, galleryRows = 4)
+        val maximum = AppSettings(galleryColumns = 4, galleryRows = 8)
+
+        assertEquals(12, compact.galleryPageSize)
+        assertEquals(32, maximum.galleryPageSize)
+    }
 }
