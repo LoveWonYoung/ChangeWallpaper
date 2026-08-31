@@ -6,10 +6,12 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,6 +42,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -137,16 +141,31 @@ private fun WallpaperApp(uiState: WallpaperUiState, viewModel: WallpaperViewMode
     ) { it?.let(viewModel::importSettings) }
 
     Scaffold(
+        containerColor = Color.Transparent,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            NavigationBar {
-                AppPage.entries.forEach { destination ->
-                    NavigationBarItem(
-                        selected = page == destination,
-                        onClick = { page = destination },
-                        icon = { Text(destination.glyph, fontSize = 20.sp) },
-                        label = { Text(destination.label) }
-                    )
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                NavigationBar(
+                    modifier = Modifier.clip(RoundedCornerShape(28.dp)),
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 0.dp
+                ) {
+                    AppPage.entries.forEach { destination ->
+                        NavigationBarItem(
+                            selected = page == destination,
+                            onClick = { page = destination },
+                            icon = { Text(destination.glyph, fontSize = 20.sp) },
+                            label = { Text(destination.label) },
+                            colors = NavigationBarItemDefaults.colors(
+                                indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        )
+                    }
                 }
             }
         }
@@ -157,7 +176,8 @@ private fun WallpaperApp(uiState: WallpaperUiState, viewModel: WallpaperViewMode
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f),
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.96f),
                             MaterialTheme.colorScheme.background,
                             MaterialTheme.colorScheme.background
                         )
@@ -208,7 +228,7 @@ private fun HomePage(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item { AppHeader(settings.isEnabled) }
+        item { AppHeader(settings) }
         if (uiState.workStatus.isRunning) {
             item {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -294,7 +314,11 @@ private fun HomePage(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    SettingSwitch("仅 Wi-Fi 下载", settings.wifiOnly, viewModel::setWifiOnly)
+                    Text(
+                        "Wi-Fi 和移动数据均可下载",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 } else {
                     ChoiceRow(
                         values = RotationMode.entries,
@@ -332,7 +356,7 @@ private fun HomePage(
         item {
             SectionCard(if (settings.source == WallpaperSource.NETWORK) "网络图库" else "壁纸相册") {
                 if (settings.source == WallpaperSource.NETWORK) {
-                    val count = uiState.networkGallery.wallpapers.size
+                    val count = uiState.networkAlbums.totalCount
                     Text(if (count == 0) "可浏览服务端提供的全部壁纸" else "服务端图库 · $count 张")
                 } else if (settings.albums.isEmpty()) {
                     Text("还没有相册。选择一个包含图片的文件夹即可开始。")
@@ -362,9 +386,15 @@ private fun HomePage(
 private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel, addAlbum: () -> Unit) {
     val settings = uiState.settings
     var selectedNetworkWallpaper by remember { mutableStateOf<NetworkWallpaper?>(null) }
-    LaunchedEffect(Unit) { viewModel.refreshNetworkGallery() }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    BackHandler(enabled = uiState.selectedNetworkAlbum != null) {
+        viewModel.closeNetworkAlbum()
+    }
+    LaunchedEffect(Unit) { viewModel.refreshNetworkAlbums() }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
+        state = listState,
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -373,56 +403,32 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
         }
         item {
             SectionCard("网络图库") {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "${uiState.networkGallery.wallpapers.size} 张图片",
-                        Modifier.weight(1f),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedButton(viewModel::refreshNetworkGallery) { Text("刷新") }
-                }
-                if (uiState.networkGallery.isLoading) {
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                }
-                if (uiState.networkGallery.error.isNotBlank()) {
-                    Text(uiState.networkGallery.error, color = MaterialTheme.colorScheme.error)
-                }
-                uiState.networkGallery.wallpapers.chunked(5).forEach { rowImages ->
-                    Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        rowImages.forEach { image ->
-                            Column(
-                                Modifier
-                                    .weight(1f)
-                                    .clickable { selectedNetworkWallpaper = image }
-                            ) {
-                                AsyncImage(
-                                    model = image.thumbnailUrl,
-                                    contentDescription = image.fileName,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(108.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                                )
-                                Text(
-                                    image.fileName,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                            }
+                val selectedAlbum = uiState.selectedNetworkAlbum
+                if (selectedAlbum == null) {
+                    NetworkAlbumsContent(
+                        state = uiState.networkAlbums,
+                        onRefresh = viewModel::refreshNetworkAlbums,
+                        onOpen = { album ->
+                            viewModel.openNetworkAlbum(album)
+                            scope.launch { listState.animateScrollToItem(1) }
                         }
-                        repeat(5 - rowImages.size) { Spacer(Modifier.weight(1f)) }
-                    }
-                }
-                if (!uiState.networkGallery.isLoading &&
-                    uiState.networkGallery.wallpapers.isEmpty() &&
-                    uiState.networkGallery.error.isBlank()
-                ) {
-                    Text("服务端图库为空")
+                    )
+                } else {
+                    NetworkAlbumContent(
+                        album = selectedAlbum,
+                        gallery = uiState.networkGallery,
+                        onBack = viewModel::closeNetworkAlbum,
+                        onRefresh = viewModel::refreshNetworkGallery,
+                        onPreviousPage = {
+                            viewModel.previousNetworkGalleryPage()
+                            scope.launch { listState.animateScrollToItem(1) }
+                        },
+                        onNextPage = {
+                            viewModel.nextNetworkGalleryPage()
+                            scope.launch { listState.animateScrollToItem(1) }
+                        },
+                        onOpenImage = { selectedNetworkWallpaper = it }
+                    )
                 }
             }
         }
@@ -457,6 +463,174 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
 }
 
 @Composable
+private fun NetworkAlbumsContent(
+    state: NetworkAlbumsState,
+    onRefresh: () -> Unit,
+    onOpen: (NetworkAlbum) -> Unit
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "${state.albums.size} 个相册 · ${state.totalCount} 张图片",
+            Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedButton(onClick = onRefresh, enabled = !state.isLoading) { Text("刷新") }
+    }
+    if (state.isLoading) {
+        Spacer(Modifier.height(8.dp))
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+    }
+    if (state.error.isNotBlank()) {
+        Spacer(Modifier.height(8.dp))
+        Text(state.error, color = MaterialTheme.colorScheme.error)
+    }
+    state.albums.chunked(2).forEach { rowAlbums ->
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            rowAlbums.forEach { album ->
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(190.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .clickable { onOpen(album) }
+                ) {
+                    AsyncImage(
+                        model = album.coverUrl,
+                        contentDescription = album.displayName,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.76f))
+                                )
+                            )
+                    )
+                    Column(Modifier.align(Alignment.BottomStart).padding(12.dp)) {
+                        Text(
+                            album.displayName,
+                            color = Color.White,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text("${album.count} 张", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+            repeat(2 - rowAlbums.size) { Spacer(Modifier.weight(1f)) }
+        }
+    }
+    if (!state.isLoading && state.albums.isEmpty() && state.error.isBlank()) {
+        Spacer(Modifier.height(8.dp))
+        Text("服务端还没有相册")
+    }
+}
+
+@Composable
+private fun NetworkAlbumContent(
+    album: NetworkAlbum,
+    gallery: NetworkGalleryState,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onPreviousPage: () -> Unit,
+    onNextPage: () -> Unit,
+    onOpenImage: (NetworkWallpaper) -> Unit
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(onClick = onBack) { Text("返回相册") }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(album.displayName, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+            Text(
+                "${if (gallery.totalCount > 0) gallery.totalCount else album.count} 张图片",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        OutlinedButton(onClick = onRefresh, enabled = !gallery.isLoading) { Text("刷新") }
+    }
+    if (gallery.isLoading) {
+        Spacer(Modifier.height(8.dp))
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+    }
+    if (gallery.error.isNotBlank()) {
+        Spacer(Modifier.height(8.dp))
+        Text(gallery.error, color = MaterialTheme.colorScheme.error)
+    }
+    gallery.wallpapers.chunked(2).forEach { rowImages ->
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            rowImages.forEach { image ->
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(190.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .clickable { onOpenImage(image) }
+                ) {
+                    AsyncImage(
+                        model = image.thumbnailUrl,
+                        contentDescription = image.fileName,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.7f))
+                                )
+                            )
+                    )
+                    Text(
+                        image.fileName.substringAfterLast('/'),
+                        modifier = Modifier.align(Alignment.BottomStart).padding(12.dp),
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+            repeat(2 - rowImages.size) { Spacer(Modifier.weight(1f)) }
+        }
+    }
+    if (gallery.totalCount > 0) {
+        Spacer(Modifier.height(12.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(
+                onClick = onPreviousPage,
+                modifier = Modifier.weight(1f),
+                enabled = !gallery.isLoading && gallery.hasPreviousPage
+            ) { Text("上一页") }
+            Text("${gallery.pageIndex + 1} / ${gallery.pageCount}", style = MaterialTheme.typography.labelLarge)
+            OutlinedButton(
+                onClick = onNextPage,
+                modifier = Modifier.weight(1f),
+                enabled = !gallery.isLoading && gallery.hasNextPage
+            ) { Text("下一页") }
+        }
+    }
+    if (!gallery.isLoading && gallery.wallpapers.isEmpty() && gallery.error.isBlank()) {
+        Spacer(Modifier.height(8.dp))
+        Text("这个相册还没有图片")
+    }
+}
+
+@Composable
 private fun NetworkWallpaperPreview(
     wallpaper: NetworkWallpaper,
     target: WallpaperTarget,
@@ -466,7 +640,8 @@ private fun NetworkWallpaperPreview(
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Card(
             modifier = Modifier.fillMaxSize().padding(16.dp),
-            shape = RoundedCornerShape(22.dp)
+            shape = RoundedCornerShape(30.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Text(wallpaper.fileName, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -508,13 +683,16 @@ private fun AlbumCard(
         }
         if (images.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            images.take(30).chunked(5).forEach { rowImages ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            images.take(30).chunked(2).forEach { rowImages ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     rowImages.forEach { image ->
                         val excluded = image.uri in settings.excludedUris
-                        Column(
+                        Box(
                             Modifier
                                 .weight(1f)
+                                .height(170.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .clickable { viewModel.toggleExcluded(image) }
                                 .alpha(if (excluded) 0.35f else 1f)
                         ) {
@@ -523,22 +701,32 @@ private fun AlbumCard(
                                 contentDescription = image.name,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(92.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .fillMaxSize()
+                            )
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.72f))
+                                        )
+                                    )
                             )
                             Text(
                                 if (excluded) "已排除" else image.name,
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .padding(12.dp),
+                                color = Color.White,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.labelSmall
                             )
                         }
                     }
-                    repeat(5 - rowImages.size) { Spacer(Modifier.weight(1f)) }
+                    repeat(2 - rowImages.size) { Spacer(Modifier.weight(1f)) }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
             }
             if (images.size > 30) Text("仅预览前 30 张，轮播会使用全部图片")
             Text("点击图片可排除或恢复", style = MaterialTheme.typography.bodySmall)
@@ -564,9 +752,16 @@ private fun HistoryPage(settings: AppSettings, viewModel: WallpaperViewModel) {
         }
         items(settings.history) { entry ->
             Card(
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (entry.success) MaterialTheme.colorScheme.outlineVariant
+                    else MaterialTheme.colorScheme.error.copy(alpha = 0.22f)
+                ),
                 colors = CardDefaults.cardColors(
                     containerColor = if (entry.success) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.errorContainer
-                )
+                ),
+                elevation = CardDefaults.cardElevation(0.dp)
             ) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     AsyncImage(
@@ -672,11 +867,11 @@ private fun IntervalCard(currentMinutes: Long, onSave: (Long) -> Unit) {
         ChoiceRow(IntervalUnit.entries, unit, { it.label }) { unit = it }
         Spacer(Modifier.height(8.dp))
         Button(
-            onClick = { value.toLongOrNull()?.times(unit.minutes)?.takeIf { it >= 15 }?.let(onSave) },
+            onClick = { value.toLongOrNull()?.times(unit.minutes)?.takeIf { it >= 5 }?.let(onSave) },
             modifier = Modifier.fillMaxWidth(),
-            enabled = (value.toLongOrNull()?.times(unit.minutes) ?: 0) >= 15
+            enabled = (value.toLongOrNull()?.times(unit.minutes) ?: 0) >= 5
         ) { Text("保存间隔") }
-        Text("最短 15 分钟；保存后正在运行的任务会自动更新。", style = MaterialTheme.typography.bodySmall)
+        Text("最短 5 分钟；保存后正在运行的任务会自动更新。", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -719,42 +914,136 @@ private fun SettingSwitch(label: String, checked: Boolean, onChecked: (Boolean) 
 private fun SectionCard(title: String, content: @Composable () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)),
-        elevation = CardDefaults.cardElevation(1.dp)
+        shape = RoundedCornerShape(26.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)),
+        elevation = CardDefaults.cardElevation(0.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f))
     ) {
-        Column(Modifier.padding(18.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(12.dp))
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(width = 6.dp, height = 18.dp)
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(14.dp))
             content()
         }
     }
 }
 
 @Composable
-private fun AppHeader(enabled: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(58.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
-            Text("景", color = MaterialTheme.colorScheme.onPrimary, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+private fun AppHeader(settings: AppSettings) {
+    val latest = settings.history.firstOrNull { it.success }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(310.dp)
+            .clip(RoundedCornerShape(32.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        MaterialTheme.colorScheme.primary,
+                        MaterialTheme.colorScheme.tertiary
+                    )
+                )
+            )
+    ) {
+        latest?.let { entry ->
+            AsyncImage(
+                model = entry.imageUri.toUri(),
+                contentDescription = entry.imageName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
         }
-        Spacer(Modifier.width(14.dp))
-        Column {
-            Text("自动壁纸", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text(if (enabled) "每一次点亮都有新风景" else "让喜欢的图片轮流出现", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Black.copy(alpha = if (latest == null) 0.04f else 0.30f),
+                            Color.Transparent,
+                            Color.Black.copy(alpha = if (latest == null) 0.20f else 0.78f)
+                        )
+                    )
+                )
+        )
+        Column(Modifier.fillMaxSize().padding(22.dp)) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(Color.Black.copy(alpha = 0.24f))
+                    .padding(horizontal = 11.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(if (settings.isEnabled) Color(0xFFB8F5C8) else Color.White.copy(alpha = 0.62f))
+                )
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    if (settings.isEnabled) "自动轮播中" else "等待开启",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (latest == null) "你的自然画廊" else "最近的风景",
+                color = Color.White.copy(alpha = 0.76f),
+                style = MaterialTheme.typography.labelLarge
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                latest?.imageName ?: "让屏幕随风景流动",
+                style = MaterialTheme.typography.headlineLarge,
+                color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(7.dp))
+            Text(
+                latest?.let { "${formatTime(it.timestamp)} · ${targetLabel(it.target)}" }
+                    ?: if (settings.isEnabled) "每一次点亮，都遇见一幅新风景。" else "开启轮播，让喜欢的图片自然出现。",
+                color = Color.White.copy(alpha = 0.82f),
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
 }
 
 @Composable
 private fun PageTitle(title: String, subtitle: String) {
-    Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-    Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Column {
+        Text(title, style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(4.dp))
+        Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 @Composable
 private fun EmptyState(title: String, subtitle: String) {
     Column(Modifier.fillMaxWidth().padding(40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier
+                .size(54.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("◇", color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 24.sp)
+        }
+        Spacer(Modifier.height(14.dp))
         Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
         Text(subtitle, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

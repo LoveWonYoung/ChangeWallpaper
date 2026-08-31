@@ -8,6 +8,7 @@ import okhttp3.CacheControl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -49,32 +50,100 @@ object NetworkWallpaperClient {
     suspend fun downloadGalleryImage(context: Context, fileName: String): DownloadedWallpaper =
         download(context, imageUrl(fileName), fileName)
 
-    suspend fun fetchGallery(): List<NetworkWallpaper> = withContext(Dispatchers.IO) {
-        val request = noCacheRequest(infoUrl())
+    suspend fun fetchAlbums(): NetworkAlbumsState = withContext(Dispatchers.IO) {
+        val request = noCacheRequest(
+            baseUrl.newBuilder().addPathSegment("albums").build().toString()
+        )
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw httpException(response.code)
             val body = response.body?.string() ?: throw IOException("服务端返回了空响应")
-            val names = JSONObject(body).optJSONArray("wallpapers")
-            buildList {
-                if (names == null) return@buildList
-                for (index in 0 until names.length()) {
-                    val name = names.optString(index).takeIf { it.isNotBlank() } ?: continue
-                    add(NetworkWallpaper(name, thumbnailUrl(name), imageUrl(name)))
+            val json = JSONObject(body)
+            val total = json.optInt("wallpaper_count", -1)
+            if (total < 0) throw IOException("服务端返回的相册统计无效")
+            val items = json.optJSONArray("albums") ?: JSONArray()
+            val albums = buildList {
+                for (index in 0 until items.length()) {
+                    val item = items.optJSONObject(index) ?: continue
+                    val cover = item.optString("cover")
+                    val count = item.optInt("count", -1)
+                    if (cover.isBlank() || count < 0) continue
+                    add(
+                        NetworkAlbum(
+                            name = item.optString("name"),
+                            coverFileName = cover,
+                            count = count,
+                            coverUrl = thumbnailUrl(cover)
+                        )
+                    )
                 }
             }
+            NetworkAlbumsState(albums = albums, totalCount = total)
         }
     }
+
+    suspend fun fetchGalleryPage(
+        offset: Int,
+        limit: Int,
+        folder: String? = null
+    ): NetworkGalleryPage = withContext(Dispatchers.IO) {
+        require(offset >= 0) { "offset must not be negative" }
+        require(limit in 1..100) { "limit must be between 1 and 100" }
+        val urlBuilder = baseUrl.newBuilder()
+            .addPathSegment("gallery")
+            .addQueryParameter("offset", offset.toString())
+            .addQueryParameter("limit", limit.toString())
+        if (folder != null) urlBuilder.addQueryParameter("folder", folder)
+        val url = urlBuilder.build()
+            .toString()
+        val request = noCacheRequest(url)
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw httpException(response.code)
+            val body = response.body?.string() ?: throw IOException("服务端返回了空响应")
+            val json = JSONObject(body)
+            val total = json.optInt("total", -1)
+            val actualOffset = json.optInt("offset", -1)
+            val actualLimit = json.optInt("limit", -1)
+            if (total < 0 || actualOffset < 0 || actualLimit !in 1..100) {
+                throw IOException("服务端返回的分页信息无效")
+            }
+            val names = json.optJSONArray("wallpapers") ?: throw IOException("服务端未返回壁纸列表")
+            val fileNames = buildList {
+                for (index in 0 until names.length()) {
+                    names.optString(index).takeIf(String::isNotBlank)?.let(::add)
+                }
+            }
+            NetworkGalleryPage(
+                total = total,
+                offset = actualOffset,
+                limit = actualLimit,
+                hasMore = json.optBoolean("has_more", false),
+                fileNames = fileNames
+            )
+        }
+    }
+
+    fun galleryItem(fileName: String): NetworkWallpaper = NetworkWallpaper(
+        fileName = fileName,
+        thumbnailUrl = thumbnailUrl(fileName),
+        imageUrl = imageUrl(fileName)
+    )
 
     fun endpointUrl(mode: NetworkMode): String =
         baseUrl.newBuilder().addPathSegment(mode.endpoint).build().toString()
 
     fun thumbnailUrl(fileName: String): String =
-        baseUrl.newBuilder().addPathSegment("thumb").addPathSegment(fileName).build().toString()
+        galleryFileUrl("thumb", fileName)
 
     fun imageUrl(fileName: String): String =
-        baseUrl.newBuilder().addPathSegment("image").addPathSegment(fileName).build().toString()
+        galleryFileUrl("image", fileName)
 
-    private fun infoUrl(): String = baseUrl.newBuilder().addPathSegment("info").build().toString()
+    private fun galleryFileUrl(endpoint: String, fileName: String): String {
+        val builder = baseUrl.newBuilder().addPathSegment(endpoint)
+        fileName.split('/').forEach { segment ->
+            builder.addPathSegment(segment)
+        }
+        return builder.build().toString()
+    }
 
     private suspend fun download(
         context: Context,

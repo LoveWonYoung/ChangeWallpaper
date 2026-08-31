@@ -25,7 +25,7 @@ https://wallpaper.wonyoung.top/
 1. 后台定时拉取壁纸并自动设置
 2. 手动刷新
 3. 可选：只换桌面、只换锁屏、或两者都换
-4. 可选：仅 Wi-Fi 下载
+4. Wi-Fi 和移动数据均可下载
 5. 可选：预览图库，点击设为壁纸
 
 不做账号、分类、上传、多服务器切换。
@@ -48,7 +48,7 @@ https://wallpaper.wonyoung.top/
 - 多设备同步必须用 `/current`。
 - `/current` 即使晚几分钟再请求，仍是当前 15 分钟窗口的那张图，所以 WorkManager 略有延迟也没关系。
 
-默认实现：**每 15 分钟请求 `/current`，然后设壁纸。**
+默认实现：**每 5 分钟请求 `/current`，然后设壁纸。** 服务端仍按 15 分钟窗口切换，因此客户端最多约 5 分钟就能跟进新窗口。
 
 ---
 
@@ -138,13 +138,13 @@ GET /image/xxx.jpeg
 
 ```text
 UI（Compose）
-  开关、间隔、桌面/锁屏、仅 Wi-Fi、手动刷新、图库预览
+  开关、间隔、桌面/锁屏、手动刷新、图库预览
         |
         v
 Settings（DataStore）
         |
         v
-WorkManager PeriodicWork
+WorkManager 链式 OneTimeWork
         |
         v
 WallpaperWorker
@@ -205,7 +205,7 @@ implementation("io.coil-kt:coil-compose:2.7.0")
 
 - `SET_WALLPAPER` 是安装时权限，不需要运行时弹窗。
 - 不要申请读写相册。图片下载到 `context.cacheDir` 即可。
-- 不需要前台服务。15 分钟周期用 WorkManager 足够。
+- 不需要前台服务。用带延迟的单次 WorkManager 任务连续调度 5 分钟检查。
 - Android 13+ 如果以后加通知，再申请 `POST_NOTIFICATIONS`。第一版可以不发通知。
 
 ---
@@ -218,51 +218,30 @@ implementation("io.coil-kt:coil-compose:2.7.0")
 |-----|------|------|------|
 | `enabled` | Boolean | false | 自动换壁纸开关 |
 | `mode` | String | `current` | `current` / `next` / `random` |
-| `interval_minutes` | Int | 15 | 最小 15。WorkManager 周期任务不能更短 |
+| `interval_minutes` | Int | 5 | 最小 5。使用连续单次任务调度 |
 | `target` | String | `both` | `home` / `lock` / `both` |
-| `wifi_only` | Boolean | true | 仅 Wi-Fi 下载 |
 
-同步模式请保持间隔 15 分钟。更长也可以（30 / 60 / 120），只是会跳过中间窗口，仍然始终与当前 `/current` 一致。
+同步模式默认每 5 分钟检查一次。更长也可以，只是跟进服务端新窗口会更慢。
 
 ---
 
 ## 后台任务
 
-使用 **唯一周期任务**，避免重复调度：
+WorkManager 的周期任务最短为 15 分钟。要实现 5 分钟检查，使用带 `initialDelay` 的唯一单次任务；每次执行结束后安排下一次，并在停止时取消调度任务。网络约束使用 `NetworkType.CONNECTED`，允许 Wi-Fi 和移动数据。具体实现见 `WallpaperScheduler`。
 
 ```kotlin
-const val WORK_NAME = "wallpaper-refresh"
-
-fun enqueueWallpaperWork(context: Context, intervalMinutes: Long, wifiOnly: Boolean) {
-    val constraints = Constraints.Builder()
-        .setRequiredNetworkType(
-            if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED
+fun makeWallpaperWork(intervalMinutes: Long) =
+    OneTimeWorkRequestBuilder<WallpaperWorker>()
+        .setInitialDelay(intervalMinutes.coerceAtLeast(5), TimeUnit.MINUTES)
+        .setConstraints(
+            Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
         )
         .build()
-
-    val request = PeriodicWorkRequestBuilder<WallpaperWorker>(
-        intervalMinutes.coerceAtLeast(15),
-        TimeUnit.MINUTES
-    )
-        .setConstraints(constraints)
-        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
-        .build()
-
-    WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-        WORK_NAME,
-        ExistingPeriodicWorkPolicy.UPDATE,
-        request
-    )
-}
-
-fun cancelWallpaperWork(context: Context) {
-    WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
-}
 ```
 
-开关关掉时调用 `cancelWallpaperWork`。改间隔或仅 Wi-Fi 时重新 `enqueue`。
-
-手动刷新用 `OneTimeWorkRequest`，或在界面里直接调用同一套下载+设壁纸逻辑。
+开关关掉时取消所有自动调度任务。改间隔或来源时重新安排；手动刷新使用独立的 `OneTimeWorkRequest`。
 
 ### Worker 流程
 
@@ -354,9 +333,9 @@ fun applyWallpaper(context: Context, bitmap: Bitmap, target: String = "both") {
 - 标题：自动壁纸
 - 开关：启用自动更换
 - 模式：同步（推荐）/ 独立轮换 / 随机
-- 间隔：15 / 30 / 60 / 120 分钟
+- 间隔：最短 5 分钟
 - 范围：桌面、锁屏、两者
-- 仅 Wi-Fi
+- 网络：Wi-Fi 和移动数据
 - 按钮：立即更换
 - 状态：上次成功时间、失败原因
 - 次级入口：图库
@@ -376,8 +355,8 @@ fun applyWallpaper(context: Context, bitmap: Bitmap, target: String = "both") {
 
 `/current` 按 15 分钟整点切换。客户端两种做法都可以：
 
-1. **简单（推荐）**：WorkManager 每 15 分钟拉一次 `/current` 并设置。可能有几分钟系统延迟，但图仍与当前窗口一致。
-2. **更准时**：算到下一个 `:00/:15/:30/:45` 的延迟，用 `OneTimeWorkRequest.setInitialDelay` 链式调度。复杂，第一版不要做。
+1. **当前实现**：每 5 分钟用链式 `OneTimeWorkRequest` 拉一次 `/current`，更快发现服务端窗口变化。
+2. **更准时**：也可以算到下一个 `:00/:15/:30/:45` 的延迟，但需要处理设备时钟和系统延迟。
 
 打开 App 时如果自动更换是开的，立刻拉一次 `/current`，避免用户要等 15 分钟才看到第一张。
 
@@ -391,7 +370,7 @@ fun applyWallpaper(context: Context, bitmap: Bitmap, target: String = "both") {
 | 404 | 不要疯狂重试。记失败「服务端没有壁纸」 |
 | 500 | `retry`，指数退避 |
 | 解码失败 | `retry` 一次，仍失败则记日志 |
-| 飞行模式 / 仅 Wi-Fi 但在流量下 | WorkManager 约束会推迟，属正常 |
+| 飞行模式 | WorkManager 约束会推迟，恢复网络后执行 |
 
 健康检查：设置页可请求 `/health`，用于「服务是否在线」。不是每次换壁纸都要先打 `/health`。
 
@@ -412,8 +391,8 @@ fun applyWallpaper(context: Context, bitmap: Bitmap, target: String = "both") {
 
 1. 空项目 + 权限 + 设置页 UI
 2. OkHttp 下载 `/current`，手动按钮设壁纸
-3. WorkManager 15 分钟周期 + 开关
-4. 桌面 / 锁屏 / 仅 Wi-Fi
+3. WorkManager 5 分钟链式任务 + 开关
+4. 桌面 / 锁屏
 5. 上次成功时间
 6. 图库预览（`/info` + `/thumb` + `/image`）
 
@@ -451,7 +430,7 @@ Android 用 Logcat 打：
 - [ ] 打开开关后，无需保持 App 在前台，壁纸会自动换
 - [ ] 两台手机都开同步模式时，同一时段壁纸相同
 - [ ] 点「立即更换」马上更新
-- [ ] 仅 Wi-Fi 开启时，流量网络不下载
+- [ ] Wi-Fi 和移动数据下都能下载
 - [ ] 关闭开关后不再自动更换
 - [ ] 图库能列出全部壁纸，缩略图可点开大图
 - [ ] 杀进程、重启手机后，周期任务仍在（WorkManager 会恢复）

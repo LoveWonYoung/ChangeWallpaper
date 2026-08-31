@@ -75,11 +75,52 @@ data class NetworkWallpaper(
     val imageUrl: String
 )
 
+data class NetworkAlbum(
+    val name: String,
+    val coverFileName: String,
+    val count: Int,
+    val coverUrl: String
+) {
+    val displayName: String
+        get() = name.ifBlank { "未分类" }
+}
+
+data class NetworkAlbumsState(
+    val isLoading: Boolean = false,
+    val albums: List<NetworkAlbum> = emptyList(),
+    val totalCount: Int = 0,
+    val error: String = ""
+)
+
+data class NetworkGalleryPage(
+    val total: Int,
+    val offset: Int,
+    val limit: Int,
+    val hasMore: Boolean,
+    val fileNames: List<String>
+)
+
 data class NetworkGalleryState(
     val isLoading: Boolean = false,
     val wallpapers: List<NetworkWallpaper> = emptyList(),
+    val totalCount: Int = 0,
+    val offset: Int = 0,
+    val pageSize: Int = 24,
+    val hasMore: Boolean = false,
     val error: String = ""
-)
+) {
+    val pageCount: Int
+        get() = if (totalCount == 0) 0 else (totalCount + pageSize - 1) / pageSize
+
+    val pageIndex: Int
+        get() = if (pageSize == 0) 0 else offset / pageSize
+
+    val hasPreviousPage: Boolean
+        get() = offset > 0
+
+    val hasNextPage: Boolean
+        get() = hasMore
+}
 
 data class HistoryEntry(
     val timestamp: Long,
@@ -93,11 +134,10 @@ data class HistoryEntry(
 data class AppSettings(
     val source: WallpaperSource = WallpaperSource.NETWORK,
     val networkMode: NetworkMode = NetworkMode.CURRENT,
-    val wifiOnly: Boolean = true,
     val albums: List<WallpaperAlbum> = emptyList(),
     val homeAlbumId: String? = null,
     val lockAlbumId: String? = null,
-    val intervalMinutes: Long = 15,
+    val intervalMinutes: Long = 5,
     val target: WallpaperTarget = WallpaperTarget.BOTH,
     val rotationMode: RotationMode = RotationMode.SEQUENTIAL,
     val cropMode: CropMode = CropMode.SMART,

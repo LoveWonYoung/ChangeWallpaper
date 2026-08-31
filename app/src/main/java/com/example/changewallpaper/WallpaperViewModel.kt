@@ -20,6 +20,8 @@ import java.util.UUID
 data class WallpaperUiState(
     val settings: AppSettings = AppSettings(),
     val imagesByAlbum: Map<String, List<WallpaperImage>> = emptyMap(),
+    val networkAlbums: NetworkAlbumsState = NetworkAlbumsState(),
+    val selectedNetworkAlbum: NetworkAlbum? = null,
     val networkGallery: NetworkGalleryState = NetworkGalleryState(),
     val isScanning: Boolean = false,
     val workStatus: WorkStatus = WorkStatus(),
@@ -31,6 +33,8 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     private val workManager = WorkManager.getInstance(application)
     private val _settings = MutableStateFlow(AppSettings())
     private val _images = MutableStateFlow<Map<String, List<WallpaperImage>>>(emptyMap())
+    private val _networkAlbums = MutableStateFlow(NetworkAlbumsState())
+    private val _selectedNetworkAlbum = MutableStateFlow<NetworkAlbum?>(null)
     private val _networkGallery = MutableStateFlow(NetworkGalleryState())
     private val _scanning = MutableStateFlow(false)
     private val _workStatus = MutableStateFlow(WorkStatus())
@@ -49,12 +53,11 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
                 _settings.value = settings
                 publish()
                 if (albumsChanged) refreshImages()
-                if (firstLoad && settings.isEnabled && settings.source == WallpaperSource.NETWORK) {
-                    WallpaperScheduler.changeNow(
-                        getApplication(),
-                        source = settings.source,
-                        wifiOnly = settings.wifiOnly
-                    )
+                if (firstLoad && settings.isEnabled) {
+                    WallpaperScheduler.start(getApplication(), settings.intervalMinutes, settings.source)
+                    if (settings.source == WallpaperSource.NETWORK) {
+                        WallpaperScheduler.changeNow(getApplication(), source = settings.source)
+                    }
                 }
             }
         }
@@ -122,10 +125,9 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     fun setTarget(value: WallpaperTarget) = update { it.copy(target = value) }
     fun setSource(value: WallpaperSource) = update(reschedule = true) { it.copy(source = value, lastError = "") }
     fun setNetworkMode(value: NetworkMode) = update { it.copy(networkMode = value) }
-    fun setWifiOnly(value: Boolean) = update(reschedule = true) { it.copy(wifiOnly = value) }
     fun setRotationMode(value: RotationMode) = update { it.copy(rotationMode = value, recentUris = emptyList()) }
     fun setCropMode(value: CropMode) = update { it.copy(cropMode = value) }
-    fun setInterval(minutes: Long) = update(reschedule = true) { it.copy(intervalMinutes = minutes.coerceAtLeast(15)) }
+    fun setInterval(minutes: Long) = update(reschedule = true) { it.copy(intervalMinutes = minutes.coerceAtLeast(5)) }
     fun setActiveHours(enabled: Boolean, start: Int, end: Int) = update {
         it.copy(activeHoursEnabled = enabled, activeStartHour = start.coerceIn(0, 23), activeEndHour = end.coerceIn(0, 23))
     }
@@ -145,15 +147,10 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
                 WallpaperScheduler.start(
                     getApplication(),
                     current.intervalMinutes,
-                    current.source,
-                    current.wifiOnly
+                    current.source
                 )
                 if (current.source == WallpaperSource.NETWORK) {
-                    WallpaperScheduler.changeNow(
-                        getApplication(),
-                        source = current.source,
-                        wifiOnly = current.wifiOnly
-                    )
+                    WallpaperScheduler.changeNow(getApplication(), source = current.source)
                 }
             } else WallpaperScheduler.stop(getApplication())
             message(if (enabled) "自动更换已开启" else "自动更换已停止")
@@ -177,19 +174,16 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
         WallpaperScheduler.changeNow(
             getApplication(),
             command,
-            settings.source,
-            settings.wifiOnly
+            settings.source
         )
     }
 
     fun setNetworkWallpaper(fileName: String) {
-        val settings = _settings.value
         _workStatus.value = WorkStatus(true, "正在下载网络图片")
         publish()
         WallpaperScheduler.changeNow(
             context = getApplication(),
             source = WallpaperSource.NETWORK,
-            wifiOnly = settings.wifiOnly,
             networkFileName = fileName
         )
     }
@@ -211,18 +205,84 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun refreshNetworkGallery() {
-        if (_networkGallery.value.isLoading) return
+    fun refreshNetworkAlbums() {
+        if (_networkAlbums.value.isLoading) return
+        _networkAlbums.value = _networkAlbums.value.copy(isLoading = true, error = "")
+        publish()
         viewModelScope.launch {
-            _networkGallery.value = _networkGallery.value.copy(isLoading = true, error = "")
-            publish()
-            runCatching { NetworkWallpaperClient.fetchGallery() }
-                .onSuccess { wallpapers ->
-                    _networkGallery.value = NetworkGalleryState(wallpapers = wallpapers)
+            runCatching { NetworkWallpaperClient.fetchAlbums() }
+                .onSuccess { result ->
+                    _networkAlbums.value = result
+                    val selectedName = _selectedNetworkAlbum.value?.name
+                    if (selectedName != null) {
+                        _selectedNetworkAlbum.value = result.albums.firstOrNull { it.name == selectedName }
+                        if (_selectedNetworkAlbum.value == null) {
+                            _networkGallery.value = NetworkGalleryState()
+                        }
+                    }
                 }
                 .onFailure { exception ->
+                    _networkAlbums.value = _networkAlbums.value.copy(
+                        isLoading = false,
+                        error = exception.message ?: "无法加载网络相册"
+                    )
+                }
+            publish()
+        }
+    }
+
+    fun openNetworkAlbum(album: NetworkAlbum) {
+        _selectedNetworkAlbum.value = album
+        _networkGallery.value = NetworkGalleryState(pageSize = _networkGallery.value.pageSize)
+        publish()
+        loadNetworkGalleryPage(offset = 0)
+    }
+
+    fun closeNetworkAlbum() {
+        _selectedNetworkAlbum.value = null
+        _networkGallery.value = NetworkGalleryState(pageSize = _networkGallery.value.pageSize)
+        publish()
+    }
+
+    fun refreshNetworkGallery() {
+        if (_selectedNetworkAlbum.value == null) refreshNetworkAlbums()
+        else loadNetworkGalleryPage(offset = 0)
+    }
+
+    fun previousNetworkGalleryPage() {
+        val state = _networkGallery.value
+        if (!state.hasPreviousPage) return
+        loadNetworkGalleryPage((state.offset - state.pageSize).coerceAtLeast(0))
+    }
+
+    fun nextNetworkGalleryPage() {
+        val state = _networkGallery.value
+        if (!state.hasNextPage) return
+        loadNetworkGalleryPage(state.offset + state.wallpapers.size)
+    }
+
+    private fun loadNetworkGalleryPage(offset: Int) {
+        val album = _selectedNetworkAlbum.value ?: return
+        if (_networkGallery.value.isLoading) return
+        val pageSize = _networkGallery.value.pageSize
+        _networkGallery.value = _networkGallery.value.copy(isLoading = true, error = "")
+        publish()
+        viewModelScope.launch {
+            runCatching { NetworkWallpaperClient.fetchGalleryPage(offset, pageSize, album.name) }
+                .onSuccess { page ->
+                    if (_selectedNetworkAlbum.value?.name != album.name) return@onSuccess
                     _networkGallery.value = NetworkGalleryState(
-                        wallpapers = _networkGallery.value.wallpapers,
+                        wallpapers = page.fileNames.map(NetworkWallpaperClient::galleryItem),
+                        totalCount = page.total,
+                        offset = page.offset,
+                        pageSize = page.limit,
+                        hasMore = page.hasMore
+                    )
+                }
+                .onFailure { exception ->
+                    if (_selectedNetworkAlbum.value?.name != album.name) return@onFailure
+                    _networkGallery.value = _networkGallery.value.copy(
+                        isLoading = false,
                         error = exception.message ?: "无法加载网络图库"
                     )
                 }
@@ -273,8 +333,7 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
                 WallpaperScheduler.start(
                     getApplication(),
                     updated.intervalMinutes,
-                    updated.source,
-                    updated.wifiOnly
+                    updated.source
                 )
             }
         }
@@ -289,6 +348,8 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.value = WallpaperUiState(
             settings = _settings.value,
             imagesByAlbum = _images.value,
+            networkAlbums = _networkAlbums.value,
+            selectedNetworkAlbum = _selectedNetworkAlbum.value,
             networkGallery = _networkGallery.value,
             isScanning = _scanning.value,
             workStatus = _workStatus.value,

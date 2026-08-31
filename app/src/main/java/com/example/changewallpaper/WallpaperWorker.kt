@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.ConnectivityManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -16,10 +15,8 @@ import androidx.work.CoroutineWorker
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.Data
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.NetworkType
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -36,120 +33,135 @@ class WallpaperWorker(
 
     override suspend fun doWork(): Result = workerMutex.withLock {
         val store = SettingsStore.get(applicationContext)
-        var settings = store.read()
-        val forced = inputData.getBoolean(KEY_FORCED, false)
-        if (!forced && !settings.isEnabled) {
-            return@withLock Result.success(output("自动更换已关闭"))
-        }
-        if (!forced && settings.activeHoursEnabled && !isWithinActiveHours(settings)) {
-            return@withLock Result.success(output("当前不在生效时间段"))
-        }
-        val networkFileName = inputData.getString(KEY_NETWORK_FILE)
-        if (networkFileName != null || settings.source == WallpaperSource.NETWORK) {
-            return@withLock changeNetworkWallpaper(store, settings, networkFileName)
-        }
-        if (settings.albums.isEmpty()) {
-            store.update { it.copy(lastError = "尚未添加壁纸相册") }
-            return@withLock Result.failure(output("尚未添加壁纸相册"))
-        }
-
-        val command = runCatching {
-            RunCommand.valueOf(inputData.getString(KEY_COMMAND) ?: RunCommand.NEXT.name)
-        }.getOrDefault(RunCommand.NEXT)
-        val targets = when (settings.target) {
-            WallpaperTarget.HOME -> listOf(WallpaperTarget.HOME)
-            WallpaperTarget.LOCK -> listOf(WallpaperTarget.LOCK)
-            WallpaperTarget.BOTH -> {
-                if (settings.albumFor(WallpaperTarget.HOME)?.id == settings.albumFor(WallpaperTarget.LOCK)?.id) {
-                    listOf(WallpaperTarget.BOTH)
-                } else listOf(WallpaperTarget.HOME, WallpaperTarget.LOCK)
+        val recurringSlot = inputData.getString(KEY_RECURRING_SLOT)
+        try {
+            var settings = store.read()
+            val forced = inputData.getBoolean(KEY_FORCED, false)
+            if (!forced && !settings.isEnabled) {
+                return@withLock Result.success(output("自动更换已关闭"))
             }
-        }
-
-        var lastSuccess: HistoryEntry? = null
-        var failureMessage = ""
-        for (target in targets) {
-            val album = settings.albumFor(target)
-            if (album == null) {
-                failureMessage = "没有为${target.label()}选择相册"
-                continue
+            if (!forced && settings.activeHoursEnabled && !isWithinActiveHours(settings)) {
+                return@withLock Result.success(output("当前不在生效时间段"))
             }
-            val images = try {
-                WallpaperScanner.scan(applicationContext, album)
-            } catch (_: SecurityException) {
-                failureMessage = "相册“${album.name}”访问权限已失效"
-                emptyList()
-            } catch (exception: Exception) {
-                failureMessage = exception.message ?: "无法扫描相册“${album.name}”"
-                emptyList()
+            val networkFileName = inputData.getString(KEY_NETWORK_FILE)
+            if (networkFileName != null || settings.source == WallpaperSource.NETWORK) {
+                return@withLock changeNetworkWallpaper(store, settings, networkFileName)
             }
-            if (images.isEmpty()) {
-                if (failureMessage.isBlank()) failureMessage = "相册“${album.name}”内没有可用图片"
-                continue
+            if (settings.albums.isEmpty()) {
+                store.update { it.copy(lastError = "尚未添加壁纸相册") }
+                return@withLock Result.failure(output("尚未添加壁纸相册"))
             }
 
-            val attempted = mutableSetOf<String>()
-            var applied = false
-            while (attempted.size < images.size) {
-                val choice = SelectionLogic.select(
-                    images = images,
-                    settings = settings.copy(excludedUris = settings.excludedUris + attempted),
-                    albumId = album.id,
-                    command = command
-                ) ?: break
-                attempted += choice.image.uri
-                try {
-                    WallpaperRenderer.apply(applicationContext, choice.image, settings.cropMode, target)
-                    val entry = HistoryEntry(
-                        System.currentTimeMillis(),
-                        choice.image.name,
-                        choice.image.uri,
-                        target,
-                        true
-                    )
-                    settings = store.update { current ->
-                        current.copy(
-                            indexes = current.indexes + (album.id to choice.nextIndex),
-                            recentUris = choice.recentUris,
-                            history = (listOf(entry) + current.history).take(MAX_HISTORY),
-                            lastError = ""
-                        )
-                    }
-                    lastSuccess = entry
-                    applied = true
-                    break
-                } catch (exception: Exception) {
-                    failureMessage = "已跳过 ${choice.image.name}：${exception.message ?: "图片不可用"}"
-                    val failedEntry = HistoryEntry(
-                        System.currentTimeMillis(),
-                        choice.image.name,
-                        choice.image.uri,
-                        target,
-                        false,
-                        failureMessage
-                    )
-                    settings = store.update { current ->
-                        val remainingCount = (images.count { image ->
-                            image.uri !in current.excludedUris && image.uri != choice.image.uri
-                        }).coerceAtLeast(1)
-                        current.copy(
-                            indexes = current.indexes + (album.id to (choice.selectedIndex % remainingCount)),
-                            excludedUris = current.excludedUris + choice.image.uri,
-                            history = (listOf(failedEntry) + current.history).take(MAX_HISTORY),
-                            lastError = failureMessage
-                        )
-                    }
+            val command = runCatching {
+                RunCommand.valueOf(inputData.getString(KEY_COMMAND) ?: RunCommand.NEXT.name)
+            }.getOrDefault(RunCommand.NEXT)
+            val targets = when (settings.target) {
+                WallpaperTarget.HOME -> listOf(WallpaperTarget.HOME)
+                WallpaperTarget.LOCK -> listOf(WallpaperTarget.LOCK)
+                WallpaperTarget.BOTH -> {
+                    if (settings.albumFor(WallpaperTarget.HOME)?.id == settings.albumFor(WallpaperTarget.LOCK)?.id) {
+                        listOf(WallpaperTarget.BOTH)
+                    } else listOf(WallpaperTarget.HOME, WallpaperTarget.LOCK)
                 }
             }
-            if (!applied && failureMessage.isBlank()) failureMessage = "所有图片都已排除或无法使用"
-        }
 
-        if (lastSuccess != null) {
-            if (settings.notificationsEnabled) showNotification(lastSuccess!!)
-            Result.success(output("已更换为 ${lastSuccess!!.imageName}"))
-        } else {
-            store.update { it.copy(lastError = failureMessage.ifBlank { "更换壁纸失败" }) }
-            Result.failure(output(failureMessage.ifBlank { "更换壁纸失败" }))
+            var lastSuccess: HistoryEntry? = null
+            var failureMessage = ""
+            for (target in targets) {
+                val album = settings.albumFor(target)
+                if (album == null) {
+                    failureMessage = "没有为${target.label()}选择相册"
+                    continue
+                }
+                val images = try {
+                    WallpaperScanner.scan(applicationContext, album)
+                } catch (_: SecurityException) {
+                    failureMessage = "相册“${album.name}”访问权限已失效"
+                    emptyList()
+                } catch (exception: Exception) {
+                    failureMessage = exception.message ?: "无法扫描相册“${album.name}”"
+                    emptyList()
+                }
+                if (images.isEmpty()) {
+                    if (failureMessage.isBlank()) failureMessage = "相册“${album.name}”内没有可用图片"
+                    continue
+                }
+
+                val attempted = mutableSetOf<String>()
+                var applied = false
+                while (attempted.size < images.size) {
+                    val choice = SelectionLogic.select(
+                        images = images,
+                        settings = settings.copy(excludedUris = settings.excludedUris + attempted),
+                        albumId = album.id,
+                        command = command
+                    ) ?: break
+                    attempted += choice.image.uri
+                    try {
+                        WallpaperRenderer.apply(applicationContext, choice.image, settings.cropMode, target)
+                        val entry = HistoryEntry(
+                            System.currentTimeMillis(),
+                            choice.image.name,
+                            choice.image.uri,
+                            target,
+                            true
+                        )
+                        settings = store.update { current ->
+                            current.copy(
+                                indexes = current.indexes + (album.id to choice.nextIndex),
+                                recentUris = choice.recentUris,
+                                history = (listOf(entry) + current.history).take(MAX_HISTORY),
+                                lastError = ""
+                            )
+                        }
+                        lastSuccess = entry
+                        applied = true
+                        break
+                    } catch (exception: Exception) {
+                        failureMessage = "已跳过 ${choice.image.name}：${exception.message ?: "图片不可用"}"
+                        val failedEntry = HistoryEntry(
+                            System.currentTimeMillis(),
+                            choice.image.name,
+                            choice.image.uri,
+                            target,
+                            false,
+                            failureMessage
+                        )
+                        settings = store.update { current ->
+                            val remainingCount = (images.count { image ->
+                                image.uri !in current.excludedUris && image.uri != choice.image.uri
+                            }).coerceAtLeast(1)
+                            current.copy(
+                                indexes = current.indexes + (album.id to (choice.selectedIndex % remainingCount)),
+                                excludedUris = current.excludedUris + choice.image.uri,
+                                history = (listOf(failedEntry) + current.history).take(MAX_HISTORY),
+                                lastError = failureMessage
+                            )
+                        }
+                    }
+                }
+                if (!applied && failureMessage.isBlank()) failureMessage = "所有图片都已排除或无法使用"
+            }
+
+            if (lastSuccess != null) {
+                if (settings.notificationsEnabled) showNotification(lastSuccess!!)
+                Result.success(output("已更换为 ${lastSuccess!!.imageName}"))
+            } else {
+                store.update { it.copy(lastError = failureMessage.ifBlank { "更换壁纸失败" }) }
+                Result.failure(output(failureMessage.ifBlank { "更换壁纸失败" }))
+            }
+        } finally {
+            if (recurringSlot != null && !isStopped) {
+                val latest = store.read()
+                if (latest.isEnabled) {
+                    WallpaperScheduler.scheduleNext(
+                        applicationContext,
+                        latest.intervalMinutes,
+                        latest.source,
+                        recurringSlot
+                    )
+                }
+            }
         }
     }
 
@@ -158,9 +170,6 @@ class WallpaperWorker(
         settings: AppSettings,
         fileName: String?
     ): Result {
-        if (settings.wifiOnly && !hasUnmeteredNetwork()) {
-            return Result.retry()
-        }
         val command = runCatching {
             RunCommand.valueOf(inputData.getString(KEY_COMMAND) ?: RunCommand.NEXT.name)
         }.getOrDefault(RunCommand.NEXT)
@@ -189,15 +198,15 @@ class WallpaperWorker(
             Result.success(output("已从网络更换为 ${entry.imageName}"))
         } catch (exception: WallpaperHttpException) {
             recordNetworkFailure(store, exception.message ?: "网络壁纸请求失败")
-            if (exception.retryable) Result.retry()
+            if (exception.retryable && !isRecurringRun()) Result.retry()
             else Result.failure(output(exception.message ?: "网络壁纸请求失败"))
         } catch (exception: IOException) {
             recordNetworkFailure(store, "网络连接失败，稍后重试")
-            Result.retry()
+            if (isRecurringRun()) Result.failure(output("网络连接失败，稍后重试")) else Result.retry()
         } catch (exception: Exception) {
             val message = exception.message ?: "网络图片无法使用"
             recordNetworkFailure(store, message)
-            if (runAttemptCount < 1) Result.retry() else Result.failure(output(message))
+            if (!isRecurringRun() && runAttemptCount < 1) Result.retry() else Result.failure(output(message))
         }
     }
 
@@ -205,10 +214,7 @@ class WallpaperWorker(
         store.update { it.copy(lastError = message) }
     }
 
-    private fun hasUnmeteredNetwork(): Boolean {
-        val manager = applicationContext.getSystemService(ConnectivityManager::class.java)
-        return manager.activeNetwork != null && !manager.isActiveNetworkMetered
-    }
+    private fun isRecurringRun(): Boolean = inputData.getString(KEY_RECURRING_SLOT) != null
 
     private fun isWithinActiveHours(settings: AppSettings): Boolean {
         val now = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -260,6 +266,7 @@ class WallpaperWorker(
         const val KEY_FORCED = "forced"
         const val KEY_MESSAGE = "message"
         const val KEY_NETWORK_FILE = "network_file"
+        const val KEY_RECURRING_SLOT = "recurring_slot"
         private const val MAX_HISTORY = 50
         private const val CHANNEL_ID = "wallpaper_changes"
         private const val NOTIFICATION_ID = 7001
@@ -269,37 +276,48 @@ class WallpaperWorker(
 
 object WallpaperScheduler {
     const val PERIODIC_WORK_NAME = "automatic_wallpaper_change"
+    private const val ALTERNATE_WORK_NAME = "automatic_wallpaper_change_alternate"
     const val IMMEDIATE_WORK_NAME = "immediate_wallpaper_change"
 
     fun start(
         context: Context,
         intervalMinutes: Long,
-        source: WallpaperSource,
-        wifiOnly: Boolean
+        source: WallpaperSource
     ) {
-        val request = PeriodicWorkRequestBuilder<WallpaperWorker>(
-            intervalMinutes.coerceAtLeast(15),
-            TimeUnit.MINUTES
-        )
-            .setConstraints(networkConstraints(source == WallpaperSource.NETWORK, wifiOnly))
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
-            .build()
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+        val manager = WorkManager.getInstance(context)
+        manager.cancelUniqueWork(ALTERNATE_WORK_NAME)
+        manager.enqueueUniqueWork(
             PERIODIC_WORK_NAME,
-            ExistingPeriodicWorkPolicy.UPDATE,
-            request
+            ExistingWorkPolicy.REPLACE,
+            recurringRequest(intervalMinutes, source, SLOT_PRIMARY)
+        )
+    }
+
+    internal fun scheduleNext(
+        context: Context,
+        intervalMinutes: Long,
+        source: WallpaperSource,
+        completedSlot: String
+    ) {
+        val nextIsPrimary = completedSlot != SLOT_PRIMARY
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            if (nextIsPrimary) PERIODIC_WORK_NAME else ALTERNATE_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            recurringRequest(intervalMinutes, source, if (nextIsPrimary) SLOT_PRIMARY else SLOT_ALTERNATE)
         )
     }
 
     fun stop(context: Context) {
-        WorkManager.getInstance(context).cancelUniqueWork(PERIODIC_WORK_NAME)
+        WorkManager.getInstance(context).apply {
+            cancelUniqueWork(PERIODIC_WORK_NAME)
+            cancelUniqueWork(ALTERNATE_WORK_NAME)
+        }
     }
 
     fun changeNow(
         context: Context,
         command: RunCommand = RunCommand.NEXT,
         source: WallpaperSource = WallpaperSource.LOCAL,
-        wifiOnly: Boolean = false,
         networkFileName: String? = null
     ) {
         val input = Data.Builder()
@@ -310,7 +328,7 @@ object WallpaperScheduler {
         val needsNetwork = source == WallpaperSource.NETWORK || networkFileName != null
         val request = OneTimeWorkRequestBuilder<WallpaperWorker>()
             .setInputData(input)
-            .setConstraints(networkConstraints(needsNetwork, wifiOnly))
+            .setConstraints(networkConstraints(needsNetwork))
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
@@ -320,14 +338,24 @@ object WallpaperScheduler {
         )
     }
 
-    private fun networkConstraints(needsNetwork: Boolean, wifiOnly: Boolean): Constraints =
+    private fun recurringRequest(
+        intervalMinutes: Long,
+        source: WallpaperSource,
+        slot: String
+    ) = OneTimeWorkRequestBuilder<WallpaperWorker>()
+        .setInputData(Data.Builder().putString(WallpaperWorker.KEY_RECURRING_SLOT, slot).build())
+        .setInitialDelay(intervalMinutes.coerceAtLeast(5), TimeUnit.MINUTES)
+        .setConstraints(networkConstraints(source == WallpaperSource.NETWORK))
+        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
+        .build()
+
+    private fun networkConstraints(needsNetwork: Boolean): Constraints =
         Constraints.Builder()
             .setRequiredNetworkType(
-                when {
-                    !needsNetwork -> NetworkType.NOT_REQUIRED
-                    wifiOnly -> NetworkType.UNMETERED
-                    else -> NetworkType.CONNECTED
-                }
+                if (needsNetwork) NetworkType.CONNECTED else NetworkType.NOT_REQUIRED
             )
             .build()
+
+    private const val SLOT_PRIMARY = "primary"
+    private const val SLOT_ALTERNATE = "alternate"
 }
