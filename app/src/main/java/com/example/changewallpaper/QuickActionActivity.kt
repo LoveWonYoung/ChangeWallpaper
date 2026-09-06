@@ -18,8 +18,9 @@ class QuickActionActivity : Activity() {
             ACTION_RANDOM -> RunCommand.RANDOM
             else -> RunCommand.NEXT
         }
-        WallpaperScheduler.changeNow(this, command)
-        Toast.makeText(this, "正在更换壁纸…", Toast.LENGTH_SHORT).show()
+        // Let this transient activity finish and the launcher resume before checking the desktop.
+        WallpaperScheduler.changeNow(this, command, initialDelaySeconds = 2)
+        Toast.makeText(this, "已提交，返回桌面后尝试更换", Toast.LENGTH_SHORT).show()
         finish()
     }
 

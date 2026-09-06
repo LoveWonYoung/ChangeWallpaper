@@ -43,6 +43,8 @@ class WallpaperWorker(
             if (!forced && settings.activeHoursEnabled && !isWithinActiveHours(settings)) {
                 return@withLock Result.success(output("当前不在生效时间段"))
             }
+            // Includes forced/manual jobs: they must not bypass the desktop-only policy.
+            DesktopWallpaperGuard.requireDesktop(applicationContext)
             settings = settings.copy(
                 target = inputData.getString(KEY_TARGET)?.let(WallpaperTarget::from) ?: settings.target,
                 cropMode = inputData.getString(KEY_CROP_MODE)?.let(CropMode::from) ?: settings.cropMode
@@ -125,6 +127,10 @@ class WallpaperWorker(
                         lastSuccess = entry
                         applied = true
                         break
+                    } catch (exception: WallpaperChangeDeferredException) {
+                        throw exception
+                    } catch (exception: kotlinx.coroutines.CancellationException) {
+                        throw exception
                     } catch (exception: Exception) {
                         failureMessage = "已跳过 ${choice.image.name}：${exception.message ?: "图片不可用"}"
                         val failedEntry = HistoryEntry(
@@ -158,6 +164,8 @@ class WallpaperWorker(
                 store.update { it.copy(lastError = failureMessage.ifBlank { "更换壁纸失败" }) }
                 Result.failure(output(failureMessage.ifBlank { "更换壁纸失败" }))
             }
+        } catch (exception: WallpaperChangeDeferredException) {
+            Result.success(output(exception.message.orEmpty()))
         } finally {
             if (recurringSlot != null && !isStopped) {
                 val latest = store.read()
@@ -187,6 +195,8 @@ class WallpaperWorker(
             }
             if (settings.notificationsEnabled) showNotification(entry)
             Result.success(output("已更换为 ${image.name}"))
+        } catch (exception: WallpaperChangeDeferredException) {
+            throw exception
         } catch (exception: kotlinx.coroutines.CancellationException) {
             throw exception
         } catch (exception: Exception) {
@@ -230,6 +240,10 @@ class WallpaperWorker(
             }
             if (settings.notificationsEnabled) showNotification(entry)
             Result.success(output("已从网络更换为 ${entry.imageName}"))
+        } catch (exception: WallpaperChangeDeferredException) {
+            throw exception
+        } catch (exception: kotlinx.coroutines.CancellationException) {
+            throw exception
         } catch (exception: WallpaperHttpException) {
             recordNetworkFailure(store, exception.message ?: "网络壁纸请求失败")
             if (exception.retryable && !isRecurringRun()) Result.retry()
@@ -359,7 +373,8 @@ object WallpaperScheduler {
         networkFileName: String? = null,
         localImage: WallpaperImage? = null,
         target: WallpaperTarget? = null,
-        cropMode: CropMode? = null
+        cropMode: CropMode? = null,
+        initialDelaySeconds: Long = 0
     ) {
         val input = Data.Builder()
             .putString(WallpaperWorker.KEY_COMMAND, command.name)
@@ -376,6 +391,7 @@ object WallpaperScheduler {
             .build()
         val needsNetwork = source == WallpaperSource.NETWORK || networkFileName != null
         val request = OneTimeWorkRequestBuilder<WallpaperWorker>()
+            .setInitialDelay(initialDelaySeconds.coerceAtLeast(0), TimeUnit.SECONDS)
             .setInputData(input)
             .setConstraints(networkConstraints(needsNetwork))
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)

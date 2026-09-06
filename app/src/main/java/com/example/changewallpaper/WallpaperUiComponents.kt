@@ -125,6 +125,8 @@ internal fun WallpaperPreview(
         Text("按屏幕比例预览 · ${cropModeLabel(crop)}", style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(10.dp))
+        Text("仅在桌面时更换；当前应用内提交会跳过。", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("应用到", style = MaterialTheme.typography.labelLarge)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             WallpaperTarget.entries.forEach { item ->

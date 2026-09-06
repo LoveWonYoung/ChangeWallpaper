@@ -361,6 +361,7 @@ private fun HomePage(
                     }
                 }
             }
+            item(span = { GridItemSpan(maxLineSpan) }) { DesktopProtectionCard() }
             item(span = { GridItemSpan(maxLineSpan) }) {
                 SectionCard("轮播设置") {
                     Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
@@ -672,6 +673,7 @@ private fun SettingsPage(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) { PageTitle("设置", "让壁纸更贴合你的使用习惯") }
+            item { DesktopProtectionCard() }
             item { ActiveHoursCard(settings, viewModel) }
             item {
                 SectionCard("图库布局") {
