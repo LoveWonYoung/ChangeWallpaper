@@ -43,6 +43,14 @@ class WallpaperWorker(
             if (!forced && settings.activeHoursEnabled && !isWithinActiveHours(settings)) {
                 return@withLock Result.success(output("当前不在生效时间段"))
             }
+            settings = settings.copy(
+                target = inputData.getString(KEY_TARGET)?.let(WallpaperTarget::from) ?: settings.target,
+                cropMode = inputData.getString(KEY_CROP_MODE)?.let(CropMode::from) ?: settings.cropMode
+            )
+            val localUri = inputData.getString(KEY_LOCAL_URI)
+            if (localUri != null) {
+                return@withLock changeSelectedLocalWallpaper(store, settings, localUri)
+            }
             val networkFileName = inputData.getString(KEY_NETWORK_FILE)
             if (networkFileName != null || settings.source == WallpaperSource.NETWORK) {
                 return@withLock changeNetworkWallpaper(store, settings, networkFileName)
@@ -165,6 +173,32 @@ class WallpaperWorker(
         }
     }
 
+    private suspend fun changeSelectedLocalWallpaper(store: SettingsStore, settings: AppSettings, uri: String): Result {
+        val image = WallpaperImage(
+            albumId = "",
+            uri = uri,
+            name = inputData.getString(KEY_LOCAL_NAME) ?: "所选壁纸"
+        )
+        return try {
+            WallpaperRenderer.apply(applicationContext, image, settings.cropMode, settings.target)
+            val entry = HistoryEntry(System.currentTimeMillis(), image.name, uri, settings.target, true)
+            store.update { current ->
+                current.copy(history = (listOf(entry) + current.history).take(MAX_HISTORY), lastError = "")
+            }
+            if (settings.notificationsEnabled) showNotification(entry)
+            Result.success(output("已更换为 ${image.name}"))
+        } catch (exception: kotlinx.coroutines.CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            val message = exception.message ?: "无法使用此图片，请重新授权相册或选择其他图片"
+            val entry = HistoryEntry(System.currentTimeMillis(), image.name, uri, settings.target, false, message)
+            store.update { current ->
+                current.copy(history = (listOf(entry) + current.history).take(MAX_HISTORY), lastError = message)
+            }
+            Result.failure(output(message))
+        }
+    }
+
     private suspend fun changeNetworkWallpaper(
         store: SettingsStore,
         settings: AppSettings,
@@ -176,9 +210,9 @@ class WallpaperWorker(
         val mode = if (command == RunCommand.RANDOM) NetworkMode.RANDOM else settings.networkMode
         return try {
             val downloaded = if (fileName == null) {
-                NetworkWallpaperClient.downloadCurrent(applicationContext, mode)
+                NetworkWallpaperClient.downloadCurrent(applicationContext, mode, settings.apiBaseUrl)
             } else {
-                NetworkWallpaperClient.downloadGalleryImage(applicationContext, fileName)
+                NetworkWallpaperClient.downloadGalleryImage(applicationContext, fileName, settings.apiBaseUrl)
             }
             WallpaperRenderer.apply(applicationContext, downloaded.image, settings.cropMode, settings.target)
             val entry = HistoryEntry(
@@ -266,6 +300,10 @@ class WallpaperWorker(
         const val KEY_FORCED = "forced"
         const val KEY_MESSAGE = "message"
         const val KEY_NETWORK_FILE = "network_file"
+        const val KEY_LOCAL_URI = "local_uri"
+        const val KEY_LOCAL_NAME = "local_name"
+        const val KEY_TARGET = "target"
+        const val KEY_CROP_MODE = "crop_mode"
         const val KEY_RECURRING_SLOT = "recurring_slot"
         private const val MAX_HISTORY = 50
         private const val CHANNEL_ID = "wallpaper_changes"
@@ -318,12 +356,23 @@ object WallpaperScheduler {
         context: Context,
         command: RunCommand = RunCommand.NEXT,
         source: WallpaperSource = WallpaperSource.LOCAL,
-        networkFileName: String? = null
+        networkFileName: String? = null,
+        localImage: WallpaperImage? = null,
+        target: WallpaperTarget? = null,
+        cropMode: CropMode? = null
     ) {
         val input = Data.Builder()
             .putString(WallpaperWorker.KEY_COMMAND, command.name)
             .putBoolean(WallpaperWorker.KEY_FORCED, true)
             .apply { networkFileName?.let { putString(WallpaperWorker.KEY_NETWORK_FILE, it) } }
+            .apply {
+                localImage?.let {
+                    putString(WallpaperWorker.KEY_LOCAL_URI, it.uri)
+                    putString(WallpaperWorker.KEY_LOCAL_NAME, it.name)
+                }
+                target?.let { putString(WallpaperWorker.KEY_TARGET, it.storedValue) }
+                cropMode?.let { putString(WallpaperWorker.KEY_CROP_MODE, it.storedValue) }
+            }
             .build()
         val needsNetwork = source == WallpaperSource.NETWORK || networkFileName != null
         val request = OneTimeWorkRequestBuilder<WallpaperWorker>()

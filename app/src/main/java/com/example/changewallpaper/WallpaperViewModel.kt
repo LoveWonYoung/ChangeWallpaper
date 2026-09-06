@@ -125,6 +125,23 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     fun setTarget(value: WallpaperTarget) = update { it.copy(target = value) }
     fun setSource(value: WallpaperSource) = update(reschedule = true) { it.copy(source = value, lastError = "") }
     fun setNetworkMode(value: NetworkMode) = update { it.copy(networkMode = value) }
+    fun setApiBaseUrl(value: String) {
+        val normalized = NetworkWallpaperClient.normalizeBaseUrl(value)
+        if (normalized == null) {
+            message("请输入有效的 HTTPS 接口网址")
+            return
+        }
+        viewModelScope.launch {
+            val updated = store.update { it.copy(apiBaseUrl = normalized, lastError = "") }
+            _settings.value = updated
+            _selectedNetworkAlbum.value = null
+            _networkGallery.value = NetworkGalleryState()
+            _networkAlbums.value = NetworkAlbumsState()
+            publish()
+            message("接口网址已保存")
+            refreshNetworkAlbums()
+        }
+    }
     fun setRotationMode(value: RotationMode) = update { it.copy(rotationMode = value, recentUris = emptyList()) }
     fun setCropMode(value: CropMode) = update { it.copy(cropMode = value) }
     fun setInterval(minutes: Long) = update(reschedule = true) { it.copy(intervalMinutes = minutes.coerceAtLeast(5)) }
@@ -179,7 +196,12 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
         current.copy(excludedUris = excluded)
     }
 
+    fun setExcluded(image: WallpaperImage, excluded: Boolean) = update { current ->
+        current.copy(excludedUris = if (excluded) current.excludedUris + image.uri else current.excludedUris - image.uri)
+    }
+
     fun changeNow(command: RunCommand = RunCommand.NEXT) {
+        if (_workStatus.value.isRunning) return
         val settings = _settings.value
         if (settings.source == WallpaperSource.LOCAL && settings.albums.isEmpty()) {
             message("请先添加壁纸相册")
@@ -194,13 +216,33 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
         )
     }
 
-    fun setNetworkWallpaper(fileName: String) {
+    fun setNetworkWallpaper(
+        fileName: String,
+        target: WallpaperTarget = _settings.value.target,
+        cropMode: CropMode = _settings.value.cropMode
+    ) {
+        if (_workStatus.value.isRunning) return
         _workStatus.value = WorkStatus(true, "正在下载网络图片")
         publish()
         WallpaperScheduler.changeNow(
             context = getApplication(),
             source = WallpaperSource.NETWORK,
-            networkFileName = fileName
+            networkFileName = fileName,
+            target = target,
+            cropMode = cropMode
+        )
+    }
+
+    fun setLocalWallpaper(image: WallpaperImage, target: WallpaperTarget, cropMode: CropMode) {
+        if (_workStatus.value.isRunning) return
+        _workStatus.value = WorkStatus(true, "正在应用所选图片")
+        publish()
+        WallpaperScheduler.changeNow(
+            context = getApplication(),
+            source = WallpaperSource.LOCAL,
+            localImage = image,
+            target = target,
+            cropMode = cropMode
         )
     }
 
@@ -223,10 +265,11 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun refreshNetworkAlbums() {
         if (_networkAlbums.value.isLoading) return
+        val apiBaseUrl = _settings.value.apiBaseUrl
         _networkAlbums.value = _networkAlbums.value.copy(isLoading = true, error = "")
         publish()
         viewModelScope.launch {
-            runCatching { NetworkWallpaperClient.fetchAlbums() }
+            runCatching { NetworkWallpaperClient.fetchAlbums(apiBaseUrl) }
                 .onSuccess { result ->
                     _networkAlbums.value = result
                     val selectedName = _selectedNetworkAlbum.value?.name
@@ -281,16 +324,19 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
         val album = _selectedNetworkAlbum.value ?: return
         if (_networkGallery.value.isLoading) return
         val pageSize = _networkGallery.value.pageSize
+        val apiBaseUrl = _settings.value.apiBaseUrl
         _networkGallery.value = _networkGallery.value.copy(isLoading = true, error = "")
         publish()
         viewModelScope.launch {
-            runCatching { NetworkWallpaperClient.fetchGalleryPage(offset, pageSize, album.name) }
+            runCatching { NetworkWallpaperClient.fetchGalleryPage(offset, pageSize, album.name, apiBaseUrl) }
                 .onSuccess { page ->
                     if (_selectedNetworkAlbum.value?.name != album.name ||
                         _networkGallery.value.pageSize != pageSize
                     ) return@onSuccess
                     _networkGallery.value = NetworkGalleryState(
-                        wallpapers = page.fileNames.map(NetworkWallpaperClient::galleryItem),
+                        wallpapers = page.fileNames.map { fileName ->
+                            NetworkWallpaperClient.galleryItem(fileName, apiBaseUrl)
+                        },
                         totalCount = page.total,
                         offset = page.offset,
                         pageSize = page.limit,

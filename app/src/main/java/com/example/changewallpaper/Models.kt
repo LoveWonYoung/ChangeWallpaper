@@ -133,6 +133,7 @@ data class HistoryEntry(
 
 data class AppSettings(
     val source: WallpaperSource = WallpaperSource.NETWORK,
+    val apiBaseUrl: String = NetworkWallpaperClient.BASE_URL,
     val networkMode: NetworkMode = NetworkMode.CURRENT,
     val galleryColumns: Int = 3,
     val galleryRows: Int = 6,

@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.CacheControl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -30,16 +31,19 @@ object NetworkWallpaperClient {
     const val BASE_URL = "https://wallpaper.wonyoung.top"
     const val NETWORK_ALBUM_ID = "network"
 
-    private val baseUrl = BASE_URL.toHttpUrl()
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    suspend fun downloadCurrent(context: Context, mode: NetworkMode): DownloadedWallpaper =
+    suspend fun downloadCurrent(
+        context: Context,
+        mode: NetworkMode,
+        apiBaseUrl: String = BASE_URL
+    ): DownloadedWallpaper =
         download(
             context = context,
-            url = endpointUrl(mode),
+            url = endpointUrl(mode, apiBaseUrl),
             displayName = when (mode) {
                 NetworkMode.CURRENT -> "同步壁纸"
                 NetworkMode.NEXT -> "独立轮换壁纸"
@@ -47,10 +51,14 @@ object NetworkWallpaperClient {
             }
         )
 
-    suspend fun downloadGalleryImage(context: Context, fileName: String): DownloadedWallpaper =
-        download(context, imageUrl(fileName), fileName)
+    suspend fun downloadGalleryImage(
+        context: Context,
+        fileName: String,
+        apiBaseUrl: String = BASE_URL
+    ): DownloadedWallpaper = download(context, imageUrl(fileName, apiBaseUrl), fileName)
 
-    suspend fun fetchAlbums(): NetworkAlbumsState = withContext(Dispatchers.IO) {
+    suspend fun fetchAlbums(apiBaseUrl: String = BASE_URL): NetworkAlbumsState = withContext(Dispatchers.IO) {
+        val baseUrl = apiBaseUrl.toHttpUrl()
         val request = noCacheRequest(
             baseUrl.newBuilder().addPathSegment("albums").build().toString()
         )
@@ -72,7 +80,7 @@ object NetworkWallpaperClient {
                             name = item.optString("name"),
                             coverFileName = cover,
                             count = count,
-                            coverUrl = thumbnailUrl(cover)
+                            coverUrl = thumbnailUrl(cover, apiBaseUrl)
                         )
                     )
                 }
@@ -84,11 +92,12 @@ object NetworkWallpaperClient {
     suspend fun fetchGalleryPage(
         offset: Int,
         limit: Int,
-        folder: String? = null
+        folder: String? = null,
+        apiBaseUrl: String = BASE_URL
     ): NetworkGalleryPage = withContext(Dispatchers.IO) {
         require(offset >= 0) { "offset must not be negative" }
         require(limit in 1..100) { "limit must be between 1 and 100" }
-        val urlBuilder = baseUrl.newBuilder()
+        val urlBuilder = apiBaseUrl.toHttpUrl().newBuilder()
             .addPathSegment("gallery")
             .addQueryParameter("offset", offset.toString())
             .addQueryParameter("limit", limit.toString())
@@ -122,23 +131,34 @@ object NetworkWallpaperClient {
         }
     }
 
-    fun galleryItem(fileName: String): NetworkWallpaper = NetworkWallpaper(
+    fun galleryItem(fileName: String, apiBaseUrl: String = BASE_URL): NetworkWallpaper = NetworkWallpaper(
         fileName = fileName,
-        thumbnailUrl = thumbnailUrl(fileName),
-        imageUrl = imageUrl(fileName)
+        thumbnailUrl = thumbnailUrl(fileName, apiBaseUrl),
+        imageUrl = imageUrl(fileName, apiBaseUrl)
     )
 
-    fun endpointUrl(mode: NetworkMode): String =
-        baseUrl.newBuilder().addPathSegment(mode.endpoint).build().toString()
+    fun endpointUrl(mode: NetworkMode, apiBaseUrl: String = BASE_URL): String =
+        apiBaseUrl.toHttpUrl().newBuilder().addPathSegment(mode.endpoint).build().toString()
 
-    fun thumbnailUrl(fileName: String): String =
-        galleryFileUrl("thumb", fileName)
+    fun thumbnailUrl(fileName: String, apiBaseUrl: String = BASE_URL): String =
+        galleryFileUrl("thumb", fileName, apiBaseUrl)
 
-    fun imageUrl(fileName: String): String =
-        galleryFileUrl("image", fileName)
+    fun imageUrl(fileName: String, apiBaseUrl: String = BASE_URL): String =
+        galleryFileUrl("image", fileName, apiBaseUrl)
 
-    private fun galleryFileUrl(endpoint: String, fileName: String): String {
-        val builder = baseUrl.newBuilder().addPathSegment(endpoint)
+    fun normalizeBaseUrl(value: String): String? {
+        val url = value.trim().toHttpUrlOrNull() ?: return null
+        if (url.scheme != "https") return null
+        return url.newBuilder()
+            .query(null)
+            .fragment(null)
+            .build()
+            .toString()
+            .removeSuffix("/")
+    }
+
+    private fun galleryFileUrl(endpoint: String, fileName: String, apiBaseUrl: String): String {
+        val builder = apiBaseUrl.toHttpUrl().newBuilder().addPathSegment(endpoint)
         fileName.split('/').forEach { segment ->
             builder.addPathSegment(segment)
         }

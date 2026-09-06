@@ -13,4 +13,25 @@ class NetworkWallpaperClientTest {
         assertEquals(listOf("thumb", "分类", "hello world.jpg"), url.toHttpUrl().pathSegments)
         assertFalse(url.contains("%2F", ignoreCase = true))
     }
+
+    @Test
+    fun `custom base URL is used for API and gallery paths`() {
+        val baseUrl = "https://example.com/wallpaper"
+
+        assertEquals(
+            "https://example.com/wallpaper/next",
+            NetworkWallpaperClient.endpointUrl(NetworkMode.NEXT, baseUrl)
+        )
+        assertEquals(
+            "https://example.com/wallpaper/image/folder/a.jpg",
+            NetworkWallpaperClient.imageUrl("folder/a.jpg", baseUrl)
+        )
+    }
+
+    @Test
+    fun `base URL normalization requires HTTPS and removes trailing slash`() {
+        assertEquals("https://example.com/api", NetworkWallpaperClient.normalizeBaseUrl(" https://example.com/api/ "))
+        assertEquals(null, NetworkWallpaperClient.normalizeBaseUrl("http://example.com"))
+        assertEquals(null, NetworkWallpaperClient.normalizeBaseUrl("not a url"))
+    }
 }

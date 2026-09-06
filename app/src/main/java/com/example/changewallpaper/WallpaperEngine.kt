@@ -150,7 +150,7 @@ object WallpaperRenderer {
     }
 
     @Suppress("DEPRECATION")
-    private fun resolveTargetSize(context: Context): TargetSize {
+    internal fun resolveTargetSize(context: Context): TargetSize {
         val windowManager = context.getSystemService(WindowManager::class.java)
         val (rawWidth, rawHeight) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val bounds = windowManager.maximumWindowMetrics.bounds
@@ -242,7 +242,7 @@ object WallpaperRenderer {
         return sample
     }
 
-    private fun render(source: Bitmap, width: Int, height: Int, mode: CropMode): Bitmap {
+    internal fun render(source: Bitmap, width: Int, height: Int, mode: CropMode): Bitmap {
         val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -335,5 +335,5 @@ object WallpaperRenderer {
         WallpaperTarget.BOTH -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
     }
 
-    private data class TargetSize(val width: Int, val height: Int)
+    internal data class TargetSize(val width: Int, val height: Int)
 }
