@@ -27,6 +27,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.res.painterResource
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -98,6 +99,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.net.toUri
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.example.changewallpaper.ui.theme.ChangeWallpaperTheme
 import kotlinx.coroutines.launch
@@ -361,7 +363,9 @@ private fun HomePage(
                     }
                 }
             }
-            item(span = { GridItemSpan(maxLineSpan) }) { DesktopProtectionCard() }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                DesktopProtectionCard(settings.desktopProtectionEnabled, viewModel::setDesktopProtection)
+            }
             item(span = { GridItemSpan(maxLineSpan) }) {
                 SectionCard("轮播设置") {
                     Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
@@ -461,7 +465,27 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
 @Composable
 private fun NetworkAlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel) {
     var selectedFileName by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingDownloadFileName by rememberSaveable { mutableStateOf<String?>(null) }
     val selected = uiState.networkGallery.wallpapers.firstOrNull { it.fileName == selectedFileName }
+    val context = LocalContext.current
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val fileName = pendingDownloadFileName
+        pendingDownloadFileName = null
+        if (granted && fileName != null) viewModel.downloadNetworkWallpaper(fileName)
+        else if (!granted && fileName != null) viewModel.onStoragePermissionDenied(fileName)
+    }
+    val downloadWallpaper: (String) -> Unit = { fileName ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        ) {
+            viewModel.downloadNetworkWallpaper(fileName)
+        } else {
+            pendingDownloadFileName = fileName
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+    }
     val listState = rememberLazyListState()
     val album = uiState.selectedNetworkAlbum
     val gallery = uiState.networkGallery
@@ -546,7 +570,10 @@ private fun NetworkAlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperVie
     selected?.let { wallpaper ->
         WallpaperPreview(wallpaper.fileName.substringAfterLast('/'), wallpaper.imageUrl, uiState.settings, uiState.workStatus,
             onDismiss = { selectedFileName = null },
-            onApply = { target, crop -> viewModel.setNetworkWallpaper(wallpaper.fileName, target, crop) })
+            onApply = { target, crop -> viewModel.setNetworkWallpaper(wallpaper.fileName, target, crop) },
+            downloadInProgress = wallpaper.fileName in uiState.downloadingFileNames,
+            downloadMessage = uiState.downloadMessages[wallpaper.fileName].orEmpty(),
+            onDownload = { downloadWallpaper(wallpaper.fileName) })
     }
 }
 
@@ -673,7 +700,7 @@ private fun SettingsPage(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) { PageTitle("设置", "让壁纸更贴合你的使用习惯") }
-            item { DesktopProtectionCard() }
+            item { DesktopProtectionCard(settings.desktopProtectionEnabled, viewModel::setDesktopProtection) }
             item { ActiveHoursCard(settings, viewModel) }
             item {
                 SectionCard("图库布局") {
@@ -748,7 +775,7 @@ private fun ApiBaseUrlCard(currentUrl: String, onSave: (String) -> Unit) {
             label = { Text("API 地址") },
             placeholder = { Text(NetworkWallpaperClient.BASE_URL) },
             supportingText = {
-                Text(if (value.isBlank() || isValid) "请输入 HTTPS 地址" else "网址格式无效")
+                Text(if (value.isBlank() || isValid) "支持 HTTP 和 HTTPS 地址" else "网址格式无效")
             },
             isError = value.isNotBlank() && !isValid,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),

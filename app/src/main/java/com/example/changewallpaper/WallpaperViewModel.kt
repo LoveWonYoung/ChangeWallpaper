@@ -23,6 +23,8 @@ data class WallpaperUiState(
     val networkAlbums: NetworkAlbumsState = NetworkAlbumsState(),
     val selectedNetworkAlbum: NetworkAlbum? = null,
     val networkGallery: NetworkGalleryState = NetworkGalleryState(),
+    val downloadingFileNames: Set<String> = emptySet(),
+    val downloadMessages: Map<String, String> = emptyMap(),
     val isScanning: Boolean = false,
     val workStatus: WorkStatus = WorkStatus(),
     val userMessage: String = ""
@@ -36,6 +38,8 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     private val _networkAlbums = MutableStateFlow(NetworkAlbumsState())
     private val _selectedNetworkAlbum = MutableStateFlow<NetworkAlbum?>(null)
     private val _networkGallery = MutableStateFlow(NetworkGalleryState())
+    private val _downloadingFileNames = MutableStateFlow<Set<String>>(emptySet())
+    private val _downloadMessages = MutableStateFlow<Map<String, String>>(emptyMap())
     private val _scanning = MutableStateFlow(false)
     private val _workStatus = MutableStateFlow(WorkStatus())
     private val _message = MutableStateFlow("")
@@ -128,7 +132,7 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     fun setApiBaseUrl(value: String) {
         val normalized = NetworkWallpaperClient.normalizeBaseUrl(value)
         if (normalized == null) {
-            message("请输入有效的 HTTPS 接口网址")
+            message("请输入有效的 HTTP 或 HTTPS 接口网址")
             return
         }
         viewModelScope.launch {
@@ -148,6 +152,7 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     fun setActiveHours(enabled: Boolean, start: Int, end: Int) = update {
         it.copy(activeHoursEnabled = enabled, activeStartHour = start.coerceIn(0, 23), activeEndHour = end.coerceIn(0, 23))
     }
+    fun setDesktopProtection(enabled: Boolean) = update { it.copy(desktopProtectionEnabled = enabled) }
     fun setNotifications(enabled: Boolean) = update { it.copy(notificationsEnabled = enabled) }
     fun setTheme(mode: AppThemeMode) = update { it.copy(themeMode = mode) }
     fun setAccent(style: AccentStyle) = update { it.copy(accentStyle = style) }
@@ -244,6 +249,39 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
             target = target,
             cropMode = cropMode
         )
+    }
+
+    fun downloadNetworkWallpaper(fileName: String) {
+        if (fileName in _downloadingFileNames.value) return
+        val apiBaseUrl = _settings.value.apiBaseUrl
+        _downloadingFileNames.value += fileName
+        _downloadMessages.value -= fileName
+        publish()
+        viewModelScope.launch {
+            runCatching {
+                WallpaperFileSaver.saveNetworkWallpaper(
+                    getApplication(),
+                    fileName,
+                    apiBaseUrl
+                )
+            }.onSuccess { location ->
+                val result = "壁纸已保存到$location"
+                _downloadMessages.value += fileName to result
+                message(result)
+            }.onFailure { exception ->
+                val result = "下载失败：${exception.message ?: "无法保存壁纸"}"
+                _downloadMessages.value += fileName to result
+                message(result)
+            }
+            _downloadingFileNames.value -= fileName
+            publish()
+        }
+    }
+
+    fun onStoragePermissionDenied(fileName: String) {
+        val result = "需要存储权限才能下载壁纸"
+        _downloadMessages.value += fileName to result
+        message(result)
     }
 
     fun clearHistory() = update { it.copy(history = emptyList()) }
@@ -417,6 +455,8 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
             networkAlbums = _networkAlbums.value,
             selectedNetworkAlbum = _selectedNetworkAlbum.value,
             networkGallery = _networkGallery.value,
+            downloadingFileNames = _downloadingFileNames.value,
+            downloadMessages = _downloadMessages.value,
             isScanning = _scanning.value,
             workStatus = _workStatus.value,
             userMessage = _message.value

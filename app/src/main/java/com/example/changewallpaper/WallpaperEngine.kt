@@ -120,16 +120,17 @@ object WallpaperRenderer {
         context: Context,
         image: WallpaperImage,
         cropMode: CropMode,
-        target: WallpaperTarget
+        target: WallpaperTarget,
+        desktopProtectionEnabled: Boolean
     ) = withContext(Dispatchers.IO) {
-        DesktopWallpaperGuard.requireDesktop(context)
+        DesktopWallpaperGuard.requireDesktop(context, desktopProtectionEnabled)
         val manager = WallpaperManager.getInstance(context)
         val targetSize = resolveTargetSize(context)
         val decoded = decodeSampled(context, image.uri.toUri(), targetSize.width, targetSize.height)
         try {
             val rendered = render(decoded, targetSize.width, targetSize.height, cropMode)
             try {
-                applyRendered(context, manager, rendered, target)
+                applyRendered(context, manager, rendered, target, desktopProtectionEnabled)
             } finally {
                 if (rendered !== decoded) rendered.recycle()
             }
@@ -138,12 +139,18 @@ object WallpaperRenderer {
         }
     }
 
-    private fun applyRendered(context: Context, manager: WallpaperManager, bitmap: Bitmap, target: WallpaperTarget) {
+    private fun applyRendered(
+        context: Context,
+        manager: WallpaperManager,
+        bitmap: Bitmap,
+        target: WallpaperTarget,
+        desktopProtectionEnabled: Boolean
+    ) {
         val cropHint = Rect(0, 0, bitmap.width, bitmap.height)
-        DesktopWallpaperGuard.requireDesktop(context)
+        DesktopWallpaperGuard.requireDesktop(context, desktopProtectionEnabled)
         if (target == WallpaperTarget.BOTH) {
             manager.setBitmap(bitmap, cropHint, true, WallpaperManager.FLAG_SYSTEM)
-            DesktopWallpaperGuard.requireDesktop(context)
+            DesktopWallpaperGuard.requireDesktop(context, desktopProtectionEnabled)
             runCatching {
                 manager.setBitmap(bitmap, cropHint, true, WallpaperManager.FLAG_LOCK)
             }

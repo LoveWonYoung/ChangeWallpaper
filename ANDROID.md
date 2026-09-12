@@ -56,7 +56,7 @@ https://wallpaper.wonyoung.top/
 
 Base URL：`https://wallpaper.wonyoung.top`
 
-只使用 HTTPS。不要写死 IP，不要走 HTTP。
+默认公网服务使用 HTTPS。应用的自定义接口也支持 HTTP，便于连接局域网中的 IP、主机名和端口；公网地址仍建议使用 HTTPS。
 
 动态接口带了 `Cache-Control: no-store`。客户端 **禁止** 用 HTTP 缓存这几个地址：`/current`、`/next`、`/random`、`/info`、`/health`。
 

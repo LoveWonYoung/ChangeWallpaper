@@ -64,6 +64,9 @@ internal fun WallpaperPreview(
     workStatus: WorkStatus,
     onDismiss: () -> Unit,
     onApply: (WallpaperTarget, CropMode) -> Unit,
+    downloadInProgress: Boolean = false,
+    downloadMessage: String = "",
+    onDownload: (() -> Unit)? = null,
     excluded: Boolean? = null,
     onToggleExcluded: (() -> Unit)? = null
 ) {
@@ -125,8 +128,12 @@ internal fun WallpaperPreview(
         Text("按屏幕比例预览 · ${cropModeLabel(crop)}", style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(10.dp))
-        Text("仅在桌面时更换；当前应用内提交会跳过。", style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            if (settings.desktopProtectionEnabled) "桌面保护已开启；请返回桌面或使用桌面快捷方式更换。"
+            else "桌面保护未开启；可直接从应用内更换。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Text("应用到", style = MaterialTheme.typography.labelLarge)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             WallpaperTarget.entries.forEach { item ->
@@ -159,6 +166,27 @@ internal fun WallpaperPreview(
             Modifier.fillMaxWidth().padding(vertical = 8.dp),
             enabled = rendered.bitmap != null && !workStatus.isRunning) {
             Text(if (workStatus.isRunning) "正在更换…" else "设为${if (target == WallpaperTarget.BOTH) "主屏幕和锁屏" else targetLabel(target)}壁纸")
+        }
+        if (onDownload != null) {
+            OutlinedButton(
+                onClick = onDownload,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                enabled = !downloadInProgress
+            ) {
+                if (downloadInProgress) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(if (downloadInProgress) "正在下载…" else "下载原图到相册")
+            }
+            if (downloadMessage.isNotBlank()) {
+                Text(
+                    downloadMessage,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
     val optionsScroll = rememberScrollState()

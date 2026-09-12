@@ -13,6 +13,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 import java.util.concurrent.TimeUnit
 
 data class DownloadedWallpaper(
@@ -56,6 +57,24 @@ object NetworkWallpaperClient {
         fileName: String,
         apiBaseUrl: String = BASE_URL
     ): DownloadedWallpaper = download(context, imageUrl(fileName, apiBaseUrl), fileName)
+
+    suspend fun copyGalleryImageTo(
+        fileName: String,
+        apiBaseUrl: String = BASE_URL,
+        output: OutputStream
+    ): String = withContext(Dispatchers.IO) {
+        client.newCall(noCacheRequest(imageUrl(fileName, apiBaseUrl))).execute().use { response ->
+            if (!response.isSuccessful) throw httpException(response.code)
+            val contentType = response.header("Content-Type").orEmpty().substringBefore(';').trim()
+            if (!contentType.startsWith("image/", ignoreCase = true)) {
+                throw IOException("服务端返回的不是图片")
+            }
+            val body = response.body ?: throw IOException("服务端返回了空图片")
+            body.byteStream().use { input -> input.copyTo(output) }
+            output.flush()
+            contentType.lowercase()
+        }
+    }
 
     suspend fun fetchAlbums(apiBaseUrl: String = BASE_URL): NetworkAlbumsState = withContext(Dispatchers.IO) {
         val baseUrl = apiBaseUrl.toHttpUrl()
@@ -148,7 +167,7 @@ object NetworkWallpaperClient {
 
     fun normalizeBaseUrl(value: String): String? {
         val url = value.trim().toHttpUrlOrNull() ?: return null
-        if (url.scheme != "https") return null
+        if (url.scheme != "http" && url.scheme != "https") return null
         return url.newBuilder()
             .query(null)
             .fragment(null)

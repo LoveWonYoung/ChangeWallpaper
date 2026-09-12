@@ -73,7 +73,7 @@ class SettingsStore private constructor(private val context: Context) {
     suspend fun exportJson(): String = encode(read())
 
     private fun encode(settings: AppSettings): String = JSONObject().apply {
-        put("version", 6)
+        put("version", 7)
         put("source", settings.source.storedValue)
         put("apiBaseUrl", settings.apiBaseUrl)
         put("networkMode", settings.networkMode.storedValue)
@@ -114,6 +114,7 @@ class SettingsStore private constructor(private val context: Context) {
         put("activeHoursEnabled", settings.activeHoursEnabled)
         put("activeStartHour", settings.activeStartHour)
         put("activeEndHour", settings.activeEndHour)
+        put("desktopProtectionEnabled", settings.desktopProtectionEnabled)
         put("notificationsEnabled", settings.notificationsEnabled)
         put("themeMode", settings.themeMode.storedValue)
         put("accentStyle", settings.accentStyle.storedValue)
@@ -177,6 +178,7 @@ class SettingsStore private constructor(private val context: Context) {
                 activeHoursEnabled = json.optBoolean("activeHoursEnabled", false),
                 activeStartHour = json.optInt("activeStartHour", 8).coerceIn(0, 23),
                 activeEndHour = json.optInt("activeEndHour", 23).coerceIn(0, 23),
+                desktopProtectionEnabled = json.optBoolean("desktopProtectionEnabled", false),
                 notificationsEnabled = json.optBoolean("notificationsEnabled", false),
                 themeMode = AppThemeMode.from(json.optString("themeMode")),
                 accentStyle = AccentStyle.from(json.optString("accentStyle")),

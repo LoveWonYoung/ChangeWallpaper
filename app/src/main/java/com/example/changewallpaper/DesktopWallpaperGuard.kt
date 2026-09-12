@@ -14,7 +14,7 @@ import android.os.SystemClock
 import android.os.UserManager
 import java.util.concurrent.TimeUnit
 
-/** An unconfirmed desktop is never permission to change wallpaper. */
+/** When protection is enabled, an unconfirmed desktop is never permission to change wallpaper. */
 object DesktopWallpaperGuard {
     fun hasUsageAccess(context: Context): Boolean = runCatching {
         val appOps = context.getSystemService(AppOpsManager::class.java) ?: return false
@@ -101,7 +101,8 @@ object DesktopWallpaperGuard {
         }
     }
 
-    fun requireDesktop(context: Context) {
+    fun requireDesktop(context: Context, enabled: Boolean) {
+        if (!enabled) return
         blockedReason(context)?.let { throw WallpaperChangeDeferredException(it) }
     }
 }

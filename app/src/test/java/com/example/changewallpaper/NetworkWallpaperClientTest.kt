@@ -29,9 +29,9 @@ class NetworkWallpaperClientTest {
     }
 
     @Test
-    fun `base URL normalization requires HTTPS and removes trailing slash`() {
+    fun `base URL normalization accepts HTTP and HTTPS and removes trailing slash`() {
         assertEquals("https://example.com/api", NetworkWallpaperClient.normalizeBaseUrl(" https://example.com/api/ "))
-        assertEquals(null, NetworkWallpaperClient.normalizeBaseUrl("http://example.com"))
+        assertEquals("http://192.168.1.10:8080/api", NetworkWallpaperClient.normalizeBaseUrl(" http://192.168.1.10:8080/api/ "))
         assertEquals(null, NetworkWallpaperClient.normalizeBaseUrl("not a url"))
     }
 }

@@ -43,8 +43,8 @@ class WallpaperWorker(
             if (!forced && settings.activeHoursEnabled && !isWithinActiveHours(settings)) {
                 return@withLock Result.success(output("当前不在生效时间段"))
             }
-            // Includes forced/manual jobs: they must not bypass the desktop-only policy.
-            DesktopWallpaperGuard.requireDesktop(applicationContext)
+            // Forced/manual jobs also honor the policy when the user has enabled it.
+            DesktopWallpaperGuard.requireDesktop(applicationContext, settings.desktopProtectionEnabled)
             settings = settings.copy(
                 target = inputData.getString(KEY_TARGET)?.let(WallpaperTarget::from) ?: settings.target,
                 cropMode = inputData.getString(KEY_CROP_MODE)?.let(CropMode::from) ?: settings.cropMode
@@ -108,7 +108,13 @@ class WallpaperWorker(
                     ) ?: break
                     attempted += choice.image.uri
                     try {
-                        WallpaperRenderer.apply(applicationContext, choice.image, settings.cropMode, target)
+                        WallpaperRenderer.apply(
+                            applicationContext,
+                            choice.image,
+                            settings.cropMode,
+                            target,
+                            settings.desktopProtectionEnabled
+                        )
                         val entry = HistoryEntry(
                             System.currentTimeMillis(),
                             choice.image.name,
@@ -188,7 +194,13 @@ class WallpaperWorker(
             name = inputData.getString(KEY_LOCAL_NAME) ?: "所选壁纸"
         )
         return try {
-            WallpaperRenderer.apply(applicationContext, image, settings.cropMode, settings.target)
+            WallpaperRenderer.apply(
+                applicationContext,
+                image,
+                settings.cropMode,
+                settings.target,
+                settings.desktopProtectionEnabled
+            )
             val entry = HistoryEntry(System.currentTimeMillis(), image.name, uri, settings.target, true)
             store.update { current ->
                 current.copy(history = (listOf(entry) + current.history).take(MAX_HISTORY), lastError = "")
@@ -224,7 +236,13 @@ class WallpaperWorker(
             } else {
                 NetworkWallpaperClient.downloadGalleryImage(applicationContext, fileName, settings.apiBaseUrl)
             }
-            WallpaperRenderer.apply(applicationContext, downloaded.image, settings.cropMode, settings.target)
+            WallpaperRenderer.apply(
+                applicationContext,
+                downloaded.image,
+                settings.cropMode,
+                settings.target,
+                settings.desktopProtectionEnabled
+            )
             val entry = HistoryEntry(
                 timestamp = System.currentTimeMillis(),
                 imageName = downloaded.image.name,

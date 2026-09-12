@@ -152,6 +152,7 @@ data class AppSettings(
     val activeHoursEnabled: Boolean = false,
     val activeStartHour: Int = 8,
     val activeEndHour: Int = 23,
+    val desktopProtectionEnabled: Boolean = false,
     val notificationsEnabled: Boolean = false,
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     val accentStyle: AccentStyle = AccentStyle.FOREST,
