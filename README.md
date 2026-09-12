@@ -30,6 +30,7 @@
 - 支持设置导入与导出
 - 长按应用图标可以立即或随机更换壁纸
 - 支持添加“一键换壁纸”桌面快捷方式
+- 支持 Android Stable 通道自动检查更新、APK 下载进度、大小与 SHA-256 校验，以及系统安装确认
 - 使用 WorkManager 在后台可靠调度任务
 - 使用 DataStore、ViewModel 和 StateFlow 管理响应式状态
 
@@ -58,6 +59,18 @@
 长按桌面上的应用图标可使用快速更换操作；也可以在“设置”中添加独立桌面快捷方式。
 
 应用使用连续单次后台任务实现最短 5 分钟的检查间隔；实际执行时间仍可能受设备省电策略影响。
+
+## 应用更新发布
+
+客户端启动约 3 秒后会检查以下固定地址，404、网络失败或无效响应都会静默跳过：
+
+```text
+https://update.wonyoung.top/changewallpaper/android/stable/latest.json
+```
+
+服务端目录使用 `changewallpaper/android/stable`，`latest.json` 中的 `app`、`platform` 和 `channel` 必须分别为 `changewallpaper`、`android` 和 `stable`。发布新包时递增 Android `versionCode`，填写 APK 的 HTTPS 下载地址、文件字节数和 64 位 SHA-256；APK 的包名须保持为 `com.example.changewallpaper`，并使用与旧版本相同的签名证书。
+
+Android 不允许普通应用静默安装更新。下载与校验完成后，本应用会打开系统安装界面，由用户确认覆盖安装；Android 8.0 及以上首次使用时还需在系统设置中允许本应用安装未知应用。
 
 ## 仅桌面更换保护
 

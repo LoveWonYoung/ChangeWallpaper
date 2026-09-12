@@ -62,6 +62,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -142,6 +143,21 @@ private fun WallpaperApp(uiState: WallpaperUiState, viewModel: WallpaperViewMode
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val updateViewModel: AppUpdateViewModel = viewModel()
+    val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) { updateViewModel.checkAutomatically() }
+    LaunchedEffect(updateState.installRequest) {
+        if (updateState.installRequest > 0) {
+            val apk = updateState.downloadedApk
+            val result = if (apk != null) {
+                AppUpdateInstaller.launch(context, apk)
+            } else {
+                InstallLaunchResult.FAILED
+            }
+            updateViewModel.onInstallLaunchResult(result)
+        }
+    }
 
     LaunchedEffect(uiState.userMessage) {
         if (uiState.userMessage.isNotBlank()) {
@@ -272,6 +288,9 @@ private fun WallpaperApp(uiState: WallpaperUiState, viewModel: WallpaperViewMode
                             AppPage.SETTINGS -> SettingsPage(
                                 settings = uiState.settings,
                                 viewModel = viewModel,
+                                updateState = updateState,
+                                onCheckForUpdates = updateViewModel::checkManually,
+                                onShowUpdate = updateViewModel::showAvailableUpdate,
                                 onNotificationPermission = {
                                     if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     else viewModel.setNotifications(true)
@@ -296,6 +315,13 @@ private fun WallpaperApp(uiState: WallpaperUiState, viewModel: WallpaperViewMode
                 }
             }
         }
+    }
+    if (updateState.showDialog && updateState.availableUpdate != null) {
+        AppUpdateDialog(
+            state = updateState,
+            onDismiss = updateViewModel::dismissDialog,
+            onInstall = updateViewModel::downloadAndInstall
+        )
     }
 }
 
@@ -685,6 +711,9 @@ private fun HistoryPage(settings: AppSettings, viewModel: WallpaperViewModel) {
 private fun SettingsPage(
     settings: AppSettings,
     viewModel: WallpaperViewModel,
+    updateState: AppUpdateState,
+    onCheckForUpdates: () -> Unit,
+    onShowUpdate: () -> Unit,
     onNotificationPermission: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
@@ -746,6 +775,7 @@ private fun SettingsPage(
                 }
             }
             item { ApiBaseUrlCard(settings.apiBaseUrl, viewModel::setApiBaseUrl) }
+            item { AppUpdateCard(updateState, onCheckForUpdates, onShowUpdate) }
             item {
                 SectionCard("备份与恢复") {
                     Text("导出轮播、主题、排除列表和相册配置。导入后可能需要重新授权文件夹。")
@@ -757,10 +787,111 @@ private fun SettingsPage(
                 }
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
-                Text("自动壁纸 2.0 · Android 7.0+", Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "自动壁纸 ${BuildConfig.VERSION_NAME} · Android 7.0+",
+                    Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
+}
+
+@Composable
+private fun AppUpdateCard(
+    state: AppUpdateState,
+    onCheckForUpdates: () -> Unit,
+    onShowUpdate: () -> Unit
+) {
+    val available = state.availableUpdate
+    SectionCard("应用更新") {
+        Text("当前版本 ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · Stable")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            when {
+                state.isChecking -> "正在检查更新…"
+                available != null -> "发现新版本 ${available.version} (${available.versionCode})"
+                state.message.isNotBlank() -> state.message
+                else -> "启动后会自动检查新版本"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = if (available != null) onShowUpdate else onCheckForUpdates,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.isChecking && !state.isDownloading
+        ) {
+            Text(if (available != null) "查看更新" else "检查更新")
+        }
+    }
+}
+
+@Composable
+private fun AppUpdateDialog(
+    state: AppUpdateState,
+    onDismiss: () -> Unit,
+    onInstall: () -> Unit
+) {
+    val info = state.availableUpdate ?: return
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("发现新版本 ${info.version}") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("版本号 ${info.versionCode}${formatFileSize(info.size)?.let { " · $it" }.orEmpty()}")
+                if (info.notes.isNotBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(info.notes)
+                }
+                if (state.isDownloading) {
+                    Spacer(Modifier.height(16.dp))
+                    val progress = state.downloadProgress
+                    if (progress == null) {
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "已下载 ${(progress * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+                if (state.message.isNotBlank() && !state.isDownloading) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        state.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onInstall, enabled = !state.isDownloading) {
+                Text(
+                    when {
+                        state.isDownloading -> "下载中…"
+                        state.downloadedApk != null -> "安装"
+                        else -> "下载并安装"
+                    }
+                )
+            }
+        },
+        dismissButton = {
+            if (!state.isDownloading) TextButton(onDismiss) { Text("稍后") }
+        }
+    )
+}
+
+private fun formatFileSize(bytes: Long): String? = when {
+    bytes <= 0 -> null
+    bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 @Composable
