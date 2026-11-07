@@ -287,6 +287,8 @@ private fun WallpaperApp(uiState: WallpaperUiState, viewModel: WallpaperViewMode
                             AppPage.HISTORY -> HistoryPage(uiState.settings, viewModel)
                             AppPage.SETTINGS -> SettingsPage(
                                 settings = uiState.settings,
+                                networkConnection = uiState.networkConnection,
+                                currentWifiSsid = uiState.currentWifiSsid,
                                 viewModel = viewModel,
                                 updateState = updateState,
                                 onCheckForUpdates = updateViewModel::checkManually,
@@ -307,6 +309,18 @@ private fun WallpaperApp(uiState: WallpaperUiState, viewModel: WallpaperViewMode
                                     } else false
                                     scope.launch {
                                         snackbar.showSnackbar(if (requested) "请在系统弹窗中确认添加" else "当前桌面不支持固定快捷方式")
+                                    }
+                                },
+                                onPinWidget = {
+                                    val requested = WallpaperWidgetProvider.requestPin(context)
+                                    scope.launch {
+                                        snackbar.showSnackbar(if (requested) "请在系统弹窗中确认添加小组件" else "当前桌面不支持快捷添加小组件")
+                                    }
+                                },
+                                onAddTile = {
+                                    val requested = WallpaperTileService.requestAdd(context) { }
+                                    scope.launch {
+                                        snackbar.showSnackbar(if (requested) "已提交快速设置磁贴添加请求" else "请从系统快速设置编辑页手动添加“换壁纸”")
                                     }
                                 }
                             )
@@ -334,7 +348,14 @@ private fun HomePage(
 ) {
     val settings = uiState.settings
     val busy = uiState.workStatus.isRunning
+    val paused = settings.isEnabled && settings.isPaused()
     var expanded by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(expanded, settings.source, settings.wifiApiBaseUrl,
+        settings.mobileApiBaseUrl, settings.wifiSsid, uiState.networkConnection, uiState.currentWifiSsid) {
+        if (expanded && settings.source == WallpaperSource.NETWORK && uiState.networkAlbums.albums.isEmpty()) {
+            viewModel.refreshNetworkAlbums()
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val twoColumns = maxWidth >= 600.dp
         LazyVerticalGrid(
@@ -351,8 +372,11 @@ private fun HomePage(
                         Column(Modifier.weight(1f)) {
                             Text("自动更换", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                if (settings.isEnabled) "已开启 · 每 ${formatInterval(settings.intervalMinutes)}"
-                                else "已暂停 · 随时可以手动更换",
+                                when {
+                                    paused -> "已暂停至 ${formatPauseTime(settings.pausedUntilMillis)}"
+                                    settings.isEnabled -> "已开启 · 每 ${formatInterval(settings.intervalMinutes)}"
+                                    else -> "已停止 · 随时可以手动更换"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -360,6 +384,21 @@ private fun HomePage(
                         Switch(settings.isEnabled, viewModel::setEnabled)
                     }
                     Spacer(Modifier.height(12.dp))
+                    if (paused) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("通知中选择了暂停一天", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                TextButton(viewModel::resumeAutomation) { Text("立即恢复") }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
                     Button({ viewModel.changeNow() }, Modifier.fillMaxWidth(), enabled = !busy) {
                         Text(if (busy) "正在更换…" else "换一张")
                     }
@@ -396,7 +435,7 @@ private fun HomePage(
                 SectionCard("轮播设置") {
                     Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("${if (settings.source == WallpaperSource.NETWORK) "网络图库" else "本地相册"} · ${formatInterval(settings.intervalMinutes)}")
+                            Text("${if (settings.source == WallpaperSource.NETWORK) settings.networkAlbumName ?: "网络图库" else "本地相册"} · ${formatInterval(settings.intervalMinutes)}")
                             Text("${targetLabel(settings.target)} · ${cropModeLabel(settings.cropMode)}", style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -413,6 +452,39 @@ private fun HomePage(
                             ChoiceRow(NetworkMode.entries, settings.networkMode, ::networkModeLabel, viewModel::setNetworkMode)
                             Text(networkModeDescription(settings.networkMode), style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(12.dp))
+                            Text("网络相册范围", style = MaterialTheme.typography.labelLarge)
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(settings.networkAlbumName == null, { viewModel.setNetworkAlbum(null) },
+                                    label = { Text("全部相册") })
+                                uiState.networkAlbums.albums.filter { it.count > 0 }.forEach { album ->
+                                    FilterChip(settings.networkAlbumName == album.name,
+                                        { viewModel.setNetworkAlbum(album.name) },
+                                        label = { Text(album.displayName) })
+                                }
+                            }
+                            if (uiState.networkAlbums.isLoading) {
+                                LinearProgressIndicator(Modifier.fillMaxWidth())
+                            } else if (uiState.networkAlbums.error.isNotBlank()) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(uiState.networkAlbums.error, Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error)
+                                    TextButton(viewModel::refreshNetworkAlbums) { Text("重试") }
+                                }
+                            }
+                            if (settings.networkAlbumName != null) {
+                                Text("仅从“${settings.networkAlbumName}”随机更换；选择同步或独立轮换会恢复全部相册。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (!uiState.networkAlbums.isLoading && uiState.networkAlbums.error.isBlank() &&
+                                    uiState.networkAlbums.albums.isNotEmpty() &&
+                                    uiState.networkAlbums.albums.none { it.name == settings.networkAlbumName }) {
+                                    Text("当前服务端没有这个相册，请重新选择。",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error)
+                                }
+                            }
                         } else {
                             ChoiceRow(RotationMode.entries, settings.rotationMode, ::rotationLabel, viewModel::setRotationMode)
                         }
@@ -469,9 +541,10 @@ private fun AlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperViewModel,
     }
     selected?.let { image ->
         WallpaperPreview(
-            name = image.name, model = image.uri, settings = uiState.settings, workStatus = uiState.workStatus,
+            name = image.name, model = image.uri, focusKey = image.uri,
+            settings = uiState.settings, workStatus = uiState.workStatus,
             onDismiss = { selectedUri = null },
-            onApply = { target, crop -> viewModel.setLocalWallpaper(image, target, crop) },
+            onApply = { target, crop, focus -> viewModel.setLocalWallpaper(image, target, crop, focus) },
             excluded = image.uri in uiState.settings.excludedUris,
             onToggleExcluded = {
                 val wasExcluded = image.uri in uiState.settings.excludedUris
@@ -594,9 +667,10 @@ private fun NetworkAlbumsPage(uiState: WallpaperUiState, viewModel: WallpaperVie
         }
     }
     selected?.let { wallpaper ->
-        WallpaperPreview(wallpaper.fileName.substringAfterLast('/'), wallpaper.imageUrl, uiState.settings, uiState.workStatus,
+        WallpaperPreview(wallpaper.fileName.substringAfterLast('/'), wallpaper.imageUrl, wallpaper.fileName,
+            uiState.settings, uiState.workStatus,
             onDismiss = { selectedFileName = null },
-            onApply = { target, crop -> viewModel.setNetworkWallpaper(wallpaper.fileName, target, crop) },
+            onApply = { target, crop, focus -> viewModel.setNetworkWallpaper(wallpaper.fileName, target, crop, focus) },
             downloadInProgress = wallpaper.fileName in uiState.downloadingFileNames,
             downloadMessage = uiState.downloadMessages[wallpaper.fileName].orEmpty(),
             onDownload = { downloadWallpaper(wallpaper.fileName) })
@@ -689,7 +763,14 @@ private fun HistoryPage(settings: AppSettings, viewModel: WallpaperViewModel) {
                 elevation = CardDefaults.cardElevation(0.dp)
             ) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    GalleryImage(entry.imageUri, entry.imageName, Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)))
+                    if (entry.imageUri.isNotBlank()) {
+                        GalleryImage(entry.imageUri, entry.imageName, Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)))
+                    } else {
+                        Box(Modifier.size(52.dp).clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+                            Text("—")
+                        }
+                    }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(entry.imageName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -697,7 +778,7 @@ private fun HistoryPage(settings: AppSettings, viewModel: WallpaperViewModel) {
                             "${targetLabel(entry.target)} · ${formatTime(entry.timestamp)}",
                             style = MaterialTheme.typography.bodySmall
                         )
-                        if (!entry.success) Text(entry.message, style = MaterialTheme.typography.bodySmall)
+                        if (entry.message.isNotBlank()) Text(entry.message, style = MaterialTheme.typography.bodySmall)
                     }
                     Text(if (entry.success) "成功" else "跳过")
                 }
@@ -710,6 +791,8 @@ private fun HistoryPage(settings: AppSettings, viewModel: WallpaperViewModel) {
 @Composable
 private fun SettingsPage(
     settings: AppSettings,
+    networkConnection: NetworkConnection,
+    currentWifiSsid: String?,
     viewModel: WallpaperViewModel,
     updateState: AppUpdateState,
     onCheckForUpdates: () -> Unit,
@@ -718,7 +801,9 @@ private fun SettingsPage(
     onExport: () -> Unit,
     onImport: () -> Unit,
     onBatterySettings: () -> Unit,
-    onPinShortcut: () -> Unit
+    onPinShortcut: () -> Unit,
+    onPinWidget: () -> Unit,
+    onAddTile: () -> Unit
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         LazyVerticalGrid(
@@ -769,12 +854,31 @@ private fun SettingsPage(
             }
             item {
                 SectionCard("一键快捷方式") {
-                    Text("长按应用图标可直接选择“换壁纸”或“随机换”。也可以在桌面添加一个独立的一键更换图标。")
+                    Text("可通过应用图标、桌面小组件或系统快速设置立即控制壁纸。")
                     Spacer(Modifier.height(12.dp))
-                    Button(onPinShortcut, Modifier.fillMaxWidth()) { Text("添加到桌面") }
+                    Button(onPinWidget, Modifier.fillMaxWidth()) { Text("添加桌面控制小组件") }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onAddTile, Modifier.fillMaxWidth()) { Text("添加快速设置磁贴") }
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onPinShortcut, Modifier.fillMaxWidth()) { Text("添加一键更换图标") }
+                    Text(
+                        "开启更换通知后，还可以直接使用上一张、下一张和暂停一天。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
-            item { ApiBaseUrlCard(settings.apiBaseUrl, viewModel::setApiBaseUrl) }
+            item {
+                ApiBaseUrlCard(
+                    settings.wifiApiBaseUrl,
+                    settings.mobileApiBaseUrl,
+                    settings.wifiSsid.orEmpty(),
+                    networkConnection,
+                    currentWifiSsid,
+                    viewModel::refreshNetworkConnection,
+                    viewModel::setApiBaseUrls
+                )
+            }
             item { AppUpdateCard(updateState, onCheckForUpdates, onShowUpdate) }
             item {
                 SectionCard("备份与恢复") {
@@ -895,28 +999,132 @@ private fun formatFileSize(bytes: Long): String? = when {
 }
 
 @Composable
-private fun ApiBaseUrlCard(currentUrl: String, onSave: (String) -> Unit) {
-    var value by rememberSaveable(currentUrl) { mutableStateOf(currentUrl) }
-    val isValid = NetworkWallpaperClient.normalizeBaseUrl(value) != null
+private fun ApiBaseUrlCard(
+    wifiUrl: String,
+    mobileUrl: String,
+    wifiSsid: String,
+    connection: NetworkConnection,
+    currentWifiSsid: String?,
+    onRefreshNetwork: () -> Unit,
+    onSave: (String, String, String) -> Unit
+) {
+    val context = LocalContext.current
+    var wifiValue by rememberSaveable(wifiUrl) { mutableStateOf(wifiUrl) }
+    var mobileValue by rememberSaveable(mobileUrl) { mutableStateOf(mobileUrl) }
+    var ssidValue by rememberSaveable(wifiSsid) { mutableStateOf(wifiSsid) }
+    var permissionRefresh by remember { mutableStateOf(0) }
+    val wifiValid = NetworkWallpaperClient.normalizeBaseUrl(wifiValue) != null
+    val mobileValid = NetworkWallpaperClient.normalizeBaseUrl(mobileValue) != null
+    val fineLocationGranted = remember(permissionRefresh) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+    val backgroundLocationGranted = remember(permissionRefresh) {
+        Build.VERSION.SDK_INT < 29 ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+    val fineLocationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        permissionRefresh++
+        onRefreshNetwork()
+    }
+    val backgroundLocationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        permissionRefresh++
+        onRefreshNetwork()
+    }
+    val appSettingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        permissionRefresh++
+        onRefreshNetwork()
+    }
     SectionCard("接口网址") {
+        Text(
+            when {
+                connection == NetworkConnection.WIFI &&
+                    (wifiSsid.isBlank() || wifiSsid == currentWifiSsid) -> "当前使用 Wi-Fi 地址"
+                connection == NetworkConnection.CELLULAR -> "当前使用移动数据地址"
+                connection == NetworkConnection.WIFI -> "当前使用移动数据地址（Wi-Fi 名称未匹配或无法识别）"
+                else -> "当前使用移动数据地址（其他网络）"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
         OutlinedTextField(
-            value = value,
-            onValueChange = { value = it },
+            value = wifiValue,
+            onValueChange = { wifiValue = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("API 地址") },
+            label = { Text("Wi-Fi 时的 API 地址") },
             placeholder = { Text(NetworkWallpaperClient.BASE_URL) },
             supportingText = {
-                Text(if (value.isBlank() || isValid) "支持 HTTP 和 HTTPS 地址" else "网址格式无效")
+                Text(if (wifiValid) "支持 HTTP 和 HTTPS 地址" else "网址格式无效")
             },
-            isError = value.isNotBlank() && !isValid,
+            isError = !wifiValid,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            singleLine = true
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = ssidValue,
+            onValueChange = { ssidValue = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("指定 Wi-Fi 名称（可选）") },
+            supportingText = { Text("留空表示所有 Wi-Fi；填写后仅名称完全匹配时使用上方地址") },
+            singleLine = true
+        )
+        if (currentWifiSsid != null) {
+            TextButton({ ssidValue = currentWifiSsid }) { Text("使用当前 Wi-Fi：$currentWifiSsid") }
+        }
+        if (ssidValue.isNotBlank()) {
+            Text(
+                when {
+                    !fineLocationGranted -> "读取 Wi-Fi 名称需要精确位置权限"
+                    !backgroundLocationGranted -> "后台自动更换还需要始终允许位置权限；在应用权限的“位置信息”中选择“始终允许”"
+                    connection == NetworkConnection.WIFI && currentWifiSsid == null -> "未读取到当前 Wi-Fi 名称，请检查系统定位是否开启"
+                    else -> "已启用 Wi-Fi 名称匹配"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (!fineLocationGranted || !backgroundLocationGranted) {
+                TextButton({
+                    when {
+                        !fineLocationGranted -> fineLocationLauncher.launch(arrayOf(
+                            Manifest.permission.ACCESS_COARSE_LOCATION,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                        ))
+                        Build.VERSION.SDK_INT == 29 -> backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                        else -> appSettingsLauncher.launch(
+                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                "package:${context.packageName}".toUri())
+                        )
+                    }
+                }) { Text(if (fineLocationGranted) "授权后台识别" else "授权读取 Wi-Fi 名称") }
+            } else if (connection == NetworkConnection.WIFI && currentWifiSsid == null) {
+                TextButton({ permissionRefresh++; onRefreshNetwork() }) { Text("重新检测") }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = mobileValue,
+            onValueChange = { mobileValue = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("移动数据时的 API 地址") },
+            placeholder = { Text(NetworkWallpaperClient.BASE_URL) },
+            supportingText = {
+                Text(if (mobileValid) "其他网络也使用此地址" else "网址格式无效")
+            },
+            isError = !mobileValid,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             singleLine = true
         )
         Spacer(Modifier.height(8.dp))
         Button(
-            onClick = { onSave(value) },
+            onClick = { onSave(wifiValue, mobileValue, ssidValue) },
             modifier = Modifier.fillMaxWidth(),
-            enabled = isValid && NetworkWallpaperClient.normalizeBaseUrl(value) != currentUrl
+            enabled = wifiValid && mobileValid &&
+                (NetworkWallpaperClient.normalizeBaseUrl(wifiValue) != wifiUrl ||
+                    NetworkWallpaperClient.normalizeBaseUrl(mobileValue) != mobileUrl ||
+                    ssidValue.trim() != wifiSsid)
         ) { Text("保存接口网址") }
     }
 }
@@ -1034,7 +1242,7 @@ private fun AppHeader(settings: AppSettings) {
                 )
             )
     ) {
-        latest?.let { entry ->
+        latest?.takeIf { it.imageUri.isNotBlank() }?.let { entry ->
             AsyncImage(
                 model = entry.imageUri.toUri(),
                 contentDescription = entry.imageName,
@@ -1180,4 +1388,7 @@ private fun formatInterval(minutes: Long): String = when {
 }
 
 private fun formatTime(timestamp: Long): String =
+    SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(timestamp))
+
+private fun formatPauseTime(timestamp: Long): String =
     SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(timestamp))

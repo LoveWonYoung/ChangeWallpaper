@@ -4,4 +4,12 @@
     <string name="shortcut_change_long">立即更换下一张壁纸</string>
     <string name="shortcut_random_short">随机换</string>
     <string name="shortcut_random_long">随机更换一张壁纸</string>
+    <string name="widget_title">自动壁纸</string>
+    <string name="widget_description">快速切换或暂停壁纸</string>
+    <string name="widget_previous">上一张</string>
+    <string name="widget_next">下一张</string>
+    <string name="widget_random">随机</string>
+    <string name="widget_pause">暂停一天</string>
+    <string name="tile_change_wallpaper">换壁纸</string>
+    <string name="tile_tap_to_change">点按立即更换</string>
 </resources>

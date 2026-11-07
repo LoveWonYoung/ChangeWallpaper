@@ -40,6 +40,9 @@ class WallpaperWorker(
             if (!forced && !settings.isEnabled) {
                 return@withLock Result.success(output("自动更换已关闭"))
             }
+            if (!forced && settings.isPaused()) {
+                return@withLock Result.success(output("自动更换已暂停"))
+            }
             if (!forced && settings.activeHoursEnabled && !isWithinActiveHours(settings)) {
                 return@withLock Result.success(output("当前不在生效时间段"))
             }
@@ -113,7 +116,8 @@ class WallpaperWorker(
                             choice.image,
                             settings.cropMode,
                             target,
-                            settings.desktopProtectionEnabled
+                            settings.desktopProtectionEnabled,
+                            settings.cropFocusFor(choice.image.uri)
                         )
                         val entry = HistoryEntry(
                             System.currentTimeMillis(),
@@ -173,6 +177,7 @@ class WallpaperWorker(
         } catch (exception: WallpaperChangeDeferredException) {
             Result.success(output(exception.message.orEmpty()))
         } finally {
+            store.pruneNetworkHistory()
             if (recurringSlot != null && !isStopped) {
                 val latest = store.read()
                 if (latest.isEnabled) {
@@ -199,7 +204,8 @@ class WallpaperWorker(
                 image,
                 settings.cropMode,
                 settings.target,
-                settings.desktopProtectionEnabled
+                settings.desktopProtectionEnabled,
+                settings.cropFocusFor(uri)
             )
             val entry = HistoryEntry(System.currentTimeMillis(), image.name, uri, settings.target, true)
             store.update { current ->
@@ -229,19 +235,30 @@ class WallpaperWorker(
         val command = runCatching {
             RunCommand.valueOf(inputData.getString(KEY_COMMAND) ?: RunCommand.NEXT.name)
         }.getOrDefault(RunCommand.NEXT)
-        val mode = if (command == RunCommand.RANDOM) NetworkMode.RANDOM else settings.networkMode
+        val mode = if (command == RunCommand.RANDOM || settings.networkAlbumName != null) {
+            NetworkMode.RANDOM
+        } else settings.networkMode
+        val apiBaseUrl = NetworkEndpointResolver.currentBaseUrl(applicationContext, settings)
         return try {
             val downloaded = if (fileName == null) {
-                NetworkWallpaperClient.downloadCurrent(applicationContext, mode, settings.apiBaseUrl)
+                if (command == RunCommand.PREVIOUS) {
+                    NetworkWallpaperClient.previousDownload(applicationContext, settings.networkAlbumName, apiBaseUrl)
+                        ?: NetworkWallpaperClient.downloadCurrent(applicationContext, mode, apiBaseUrl, settings.networkAlbumName)
+                } else {
+                    NetworkWallpaperClient.downloadCurrent(applicationContext, mode, apiBaseUrl, settings.networkAlbumName)
+                }
             } else {
-                NetworkWallpaperClient.downloadGalleryImage(applicationContext, fileName, settings.apiBaseUrl)
+                NetworkWallpaperClient.downloadGalleryImage(applicationContext, fileName, apiBaseUrl)
             }
+            val cropFocus = fileName?.let { settings.cropFocuses[it] }
+                ?: settings.cropFocusFor(downloaded.historyUrl)
             WallpaperRenderer.apply(
                 applicationContext,
                 downloaded.image,
                 settings.cropMode,
                 settings.target,
-                settings.desktopProtectionEnabled
+                settings.desktopProtectionEnabled,
+                cropFocus
             )
             val entry = HistoryEntry(
                 timestamp = System.currentTimeMillis(),
@@ -253,6 +270,9 @@ class WallpaperWorker(
             store.update { current ->
                 current.copy(
                     history = (listOf(entry) + current.history).take(MAX_HISTORY),
+                    // A later automatic download of these bytes uses the same snapshot key.
+                    cropFocuses = if (fileName != null) current.cropFocuses + (downloaded.historyUrl to cropFocus)
+                        else current.cropFocuses,
                     lastError = ""
                 )
             }
@@ -313,11 +333,34 @@ class WallpaperWorker(
             .setContentTitle("壁纸已更换")
             .setContentText(entry.imageName)
             .setContentIntent(pendingIntent)
+            .addAction(
+                R.drawable.ic_history,
+                "上一张",
+                notificationAction(WallpaperActionReceiver.ACTION_PREVIOUS, 701)
+            )
+            .addAction(
+                R.drawable.ic_home,
+                "下一张",
+                notificationAction(WallpaperActionReceiver.ACTION_NEXT, 702)
+            )
+            .addAction(
+                R.drawable.ic_settings,
+                "暂停一天",
+                notificationAction(WallpaperActionReceiver.ACTION_PAUSE_ONE_DAY, 703)
+            )
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
         NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, notification)
     }
+
+    private fun notificationAction(action: String, requestCode: Int): PendingIntent =
+        PendingIntent.getBroadcast(
+            applicationContext,
+            requestCode,
+            Intent(applicationContext, WallpaperActionReceiver::class.java).setAction(action),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
     private fun output(message: String) = Data.Builder().putString(KEY_MESSAGE, message).build()
 
@@ -339,7 +382,7 @@ class WallpaperWorker(
         const val KEY_RECURRING_SLOT = "recurring_slot"
         private const val MAX_HISTORY = 50
         private const val CHANNEL_ID = "wallpaper_changes"
-        private const val NOTIFICATION_ID = 7001
+        internal const val NOTIFICATION_ID = 7001
         private val workerMutex = Mutex()
     }
 }

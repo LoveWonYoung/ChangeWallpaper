@@ -69,6 +69,26 @@ data class WallpaperImage(
     val name: String
 )
 
+data class CropFocus(
+    val x: Float = 0.5f,
+    val y: Float = 0.5f
+) {
+    fun normalized(): CropFocus = CropFocus(
+        x.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0.5f,
+        y.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0.5f
+    )
+}
+
+data class WallpaperCropFocus(
+    val home: CropFocus = CropFocus(),
+    val lock: CropFocus = CropFocus()
+) {
+    fun forTarget(target: WallpaperTarget): CropFocus = when (target) {
+        WallpaperTarget.HOME, WallpaperTarget.BOTH -> home
+        WallpaperTarget.LOCK -> lock
+    }
+}
+
 data class NetworkWallpaper(
     val fileName: String,
     val thumbnailUrl: String,
@@ -133,8 +153,11 @@ data class HistoryEntry(
 
 data class AppSettings(
     val source: WallpaperSource = WallpaperSource.NETWORK,
-    val apiBaseUrl: String = NetworkWallpaperClient.BASE_URL,
+    val wifiApiBaseUrl: String = NetworkWallpaperClient.BASE_URL,
+    val mobileApiBaseUrl: String = NetworkWallpaperClient.BASE_URL,
+    val wifiSsid: String? = null,
     val networkMode: NetworkMode = NetworkMode.CURRENT,
+    val networkAlbumName: String? = null,
     val galleryColumns: Int = 3,
     val galleryRows: Int = 6,
     val albums: List<WallpaperAlbum> = emptyList(),
@@ -144,6 +167,7 @@ data class AppSettings(
     val target: WallpaperTarget = WallpaperTarget.BOTH,
     val rotationMode: RotationMode = RotationMode.SEQUENTIAL,
     val cropMode: CropMode = CropMode.SMART,
+    val cropFocuses: Map<String, WallpaperCropFocus> = emptyMap(),
     val isEnabled: Boolean = false,
     val indexes: Map<String, Int> = emptyMap(),
     val excludedUris: Set<String> = emptySet(),
@@ -156,6 +180,7 @@ data class AppSettings(
     val notificationsEnabled: Boolean = false,
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     val accentStyle: AccentStyle = AccentStyle.FOREST,
+    val pausedUntilMillis: Long = 0L,
     val lastError: String = ""
 ) {
     val galleryPageSize: Int
@@ -169,6 +194,11 @@ data class AppSettings(
         }
         return albums.firstOrNull { it.id == id }
     }
+
+    fun cropFocusFor(imageKey: String): WallpaperCropFocus =
+        cropFocuses[imageKey] ?: WallpaperCropFocus()
+
+    fun isPaused(nowMillis: Long = System.currentTimeMillis()): Boolean = pausedUntilMillis > nowMillis
 }
 
 enum class RunCommand { NEXT, PREVIOUS, RANDOM }

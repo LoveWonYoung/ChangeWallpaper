@@ -3,6 +3,7 @@ package com.example.changewallpaper
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -17,8 +18,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
@@ -60,10 +64,11 @@ private data class PreviewBitmap(val bitmap: Bitmap? = null, val error: String? 
 internal fun WallpaperPreview(
     name: String,
     model: String,
+    focusKey: String = model,
     settings: AppSettings,
     workStatus: WorkStatus,
     onDismiss: () -> Unit,
-    onApply: (WallpaperTarget, CropMode) -> Unit,
+    onApply: (WallpaperTarget, CropMode, WallpaperCropFocus) -> Unit,
     downloadInProgress: Boolean = false,
     downloadMessage: String = "",
     onDownload: (() -> Unit)? = null,
@@ -73,12 +78,33 @@ internal fun WallpaperPreview(
     val context = LocalContext.current
     var target by rememberSaveable(model) { mutableStateOf(settings.target) }
     var crop by rememberSaveable(model) { mutableStateOf(settings.cropMode) }
+    val savedFocus = remember(model, settings.cropFocuses) { settings.cropFocusFor(focusKey) }
+    var homeFocusX by rememberSaveable(model) { mutableFloatStateOf(savedFocus.home.x) }
+    var homeFocusY by rememberSaveable(model) { mutableFloatStateOf(savedFocus.home.y) }
+    var lockFocusX by rememberSaveable(model) { mutableFloatStateOf(savedFocus.lock.x) }
+    var lockFocusY by rememberSaveable(model) { mutableFloatStateOf(savedFocus.lock.y) }
+    var focusTarget by rememberSaveable(model) { mutableStateOf(WallpaperTarget.HOME) }
+    val activeFocusTarget = when (target) {
+        WallpaperTarget.HOME -> WallpaperTarget.HOME
+        WallpaperTarget.LOCK -> WallpaperTarget.LOCK
+        WallpaperTarget.BOTH -> focusTarget
+    }
+    val activeFocus = if (activeFocusTarget == WallpaperTarget.LOCK) {
+        CropFocus(lockFocusX, lockFocusY)
+    } else {
+        CropFocus(homeFocusX, homeFocusY)
+    }
     var retry by remember(model) { mutableIntStateOf(0) }
     val configuration = LocalConfiguration.current
     val targetSize = remember(context, configuration.screenWidthDp, configuration.screenHeightDp) {
-        WallpaperRenderer.resolveTargetSize(context)
+        val fullSize = WallpaperRenderer.resolveTargetSize(context)
+        val scale = minOf(1f, 720f / fullSize.width, 1_600f / fullSize.height)
+        WallpaperRenderer.TargetSize(
+            width = (fullSize.width * scale).toInt().coerceAtLeast(1),
+            height = (fullSize.height * scale).toInt().coerceAtLeast(1)
+        )
     }
-    // Use the same rendering dimensions and algorithm as the wallpaper worker.
+    // Keep the real screen ratio and renderer while limiting drag-preview allocations.
     val source by produceState(PreviewBitmap(), model, retry, targetSize) {
         value = PreviewBitmap()
         value = withContext(Dispatchers.IO) {
@@ -96,12 +122,12 @@ internal fun WallpaperPreview(
             }
         }
     }
-    val rendered by produceState(PreviewBitmap(), source, crop, targetSize) {
+    val rendered by produceState(PreviewBitmap(), source, crop, activeFocus, targetSize) {
         value = PreviewBitmap()
         val bitmap = source.bitmap
         value = if (bitmap == null) PreviewBitmap(error = source.error) else withContext(Dispatchers.Default) {
             try {
-                PreviewBitmap(WallpaperRenderer.render(bitmap, targetSize.width, targetSize.height, crop))
+                PreviewBitmap(WallpaperRenderer.render(bitmap, targetSize.width, targetSize.height, crop, activeFocus))
             } catch (exception: CancellationException) {
                 throw exception
             } catch (_: Exception) {
@@ -111,11 +137,54 @@ internal fun WallpaperPreview(
     }
     var applicationRequested by rememberSaveable(model) { mutableStateOf(false) }
     val imageContent: @Composable (Modifier) -> Unit = { modifier ->
-        Box(modifier.padding(8.dp), contentAlignment = Alignment.Center) {
+        BoxWithConstraints(modifier.padding(8.dp), contentAlignment = Alignment.Center) {
             val bitmap = rendered.bitmap
             when {
-                bitmap != null -> Image(bitmap.asImageBitmap(), "${cropModeLabel(crop)}效果预览",
-                    Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                bitmap != null -> {
+                    val previewRatio = targetSize.width.toFloat() / targetSize.height
+                    val availableRatio = maxWidth.value / maxHeight.value
+                    val previewModifier = if (availableRatio > previewRatio) {
+                        Modifier.fillMaxHeight().aspectRatio(previewRatio)
+                    } else {
+                        Modifier.fillMaxWidth().aspectRatio(previewRatio)
+                    }
+                    Box(
+                        previewModifier.pointerInput(activeFocusTarget, crop) {
+                            fun updateFocus(position: Offset) {
+                                val x = (position.x / size.width).coerceIn(0f, 1f)
+                                val y = (position.y / size.height).coerceIn(0f, 1f)
+                                if (activeFocusTarget == WallpaperTarget.LOCK) {
+                                    lockFocusX = x
+                                    lockFocusY = y
+                                } else {
+                                    homeFocusX = x
+                                    homeFocusY = y
+                                }
+                            }
+                            detectDragGestures(
+                                onDragStart = ::updateFocus,
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    updateFocus(change.position)
+                                }
+                            )
+                        }
+                    ) {
+                        Image(
+                            bitmap.asImageBitmap(),
+                            "${cropModeLabel(crop)}效果预览",
+                            Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+                        Canvas(Modifier.fillMaxSize()) {
+                            val center = Offset(activeFocus.x * size.width, activeFocus.y * size.height)
+                            drawCircle(Color.Black.copy(alpha = 0.55f), radius = 15.dp.toPx(), center = center)
+                            drawCircle(Color.White, radius = 11.dp.toPx(), center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+                            drawLine(Color.White, center - Offset(17.dp.toPx(), 0f), center + Offset(17.dp.toPx(), 0f), 2.dp.toPx())
+                            drawLine(Color.White, center - Offset(0f, 17.dp.toPx()), center + Offset(0f, 17.dp.toPx()), 2.dp.toPx())
+                        }
+                    }
+                }
                 rendered.error != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(rendered.error.orEmpty(), style = MaterialTheme.typography.bodySmall)
                     TextButton({ retry++ }) { Text("重新加载") }
@@ -141,6 +210,19 @@ internal fun WallpaperPreview(
                     label = { Text(if (item == WallpaperTarget.BOTH) "两者" else targetLabel(item)) })
             }
         }
+        if (target == WallpaperTarget.BOTH) {
+            Text("调整裁剪焦点", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(WallpaperTarget.HOME, WallpaperTarget.LOCK).forEach { item ->
+                    FilterChip(
+                        selected = focusTarget == item,
+                        onClick = { focusTarget = item },
+                        enabled = !workStatus.isRunning,
+                        label = { Text(targetLabel(item)) }
+                    )
+                }
+            }
+        }
         Text("显示方式", style = MaterialTheme.typography.labelLarge)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CropMode.entries.forEach { item ->
@@ -149,6 +231,22 @@ internal fun WallpaperPreview(
             }
         }
         Text(cropModeDescription(crop), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "拖动预览中的准星调整${targetLabel(activeFocusTarget)}裁剪位置；仅在需要裁剪时生效。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        TextButton(
+            onClick = {
+                if (activeFocusTarget == WallpaperTarget.LOCK) {
+                    lockFocusX = 0.5f
+                    lockFocusY = 0.5f
+                } else {
+                    homeFocusX = 0.5f
+                    homeFocusY = 0.5f
+                }
+            }
+        ) { Text("焦点居中") }
         if (excluded != null && onToggleExcluded != null) {
             TextButton(onToggleExcluded) { Text(if (excluded) "恢复参与自动轮播" else "从自动轮播中排除") }
         }
@@ -162,7 +260,14 @@ internal fun WallpaperPreview(
             Text(workStatus.message, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        Button({ applicationRequested = true; onApply(target, crop) },
+        Button({
+            applicationRequested = true
+            onApply(
+                target,
+                crop,
+                WallpaperCropFocus(CropFocus(homeFocusX, homeFocusY), CropFocus(lockFocusX, lockFocusY))
+            )
+        },
             Modifier.fillMaxWidth().padding(vertical = 8.dp),
             enabled = rendered.bitmap != null && !workStatus.isRunning) {
             Text(if (workStatus.isRunning) "正在更换…" else "设为${if (target == WallpaperTarget.BOTH) "主屏幕和锁屏" else targetLabel(target)}壁纸")

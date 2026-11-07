@@ -62,4 +62,17 @@ class SelectionLogicTest {
         assertEquals(2, WallpaperRenderer.calculateSampleSize(20_000, 2_000, 1_080, 2_400))
         assertEquals(1, WallpaperRenderer.calculateSampleSize(1_080, 2_400, 1_080, 2_400))
     }
+
+    @Test
+    fun cropFocusAnchorsOverflowingContent() {
+        assertEquals(0f, WallpaperRenderer.anchoredOffset(100f, 200f, 0f))
+        assertEquals(-50f, WallpaperRenderer.anchoredOffset(100f, 200f, 0.5f))
+        assertEquals(-100f, WallpaperRenderer.anchoredOffset(100f, 200f, 1f))
+    }
+
+    @Test
+    fun cropFocusIsClampedToThePreviewBounds() {
+        assertEquals(CropFocus(0f, 1f), CropFocus(-2f, 3f).normalized())
+        assertEquals(CropFocus(), CropFocus(Float.NaN, Float.POSITIVE_INFINITY).normalized())
+    }
 }

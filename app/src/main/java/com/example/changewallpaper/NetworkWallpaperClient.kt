@@ -1,7 +1,6 @@
 package com.example.changewallpaper
 
 import android.content.Context
-import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.CacheControl
@@ -11,7 +10,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 import java.io.IOException
 import java.io.OutputStream
 import java.util.concurrent.TimeUnit
@@ -40,12 +38,13 @@ object NetworkWallpaperClient {
     suspend fun downloadCurrent(
         context: Context,
         mode: NetworkMode,
-        apiBaseUrl: String = BASE_URL
+        apiBaseUrl: String = BASE_URL,
+        folder: String? = null
     ): DownloadedWallpaper =
         download(
             context = context,
-            url = endpointUrl(mode, apiBaseUrl),
-            displayName = when (mode) {
+            url = endpointUrl(mode, apiBaseUrl, folder),
+            displayName = folder?.let { "$it 相册壁纸" } ?: when (mode) {
                 NetworkMode.CURRENT -> "同步壁纸"
                 NetworkMode.NEXT -> "独立轮换壁纸"
                 NetworkMode.RANDOM -> "随机壁纸"
@@ -57,6 +56,33 @@ object NetworkWallpaperClient {
         fileName: String,
         apiBaseUrl: String = BASE_URL
     ): DownloadedWallpaper = download(context, imageUrl(fileName, apiBaseUrl), fileName)
+
+    fun previousDownload(context: Context, folder: String? = null, apiBaseUrl: String = BASE_URL): DownloadedWallpaper? {
+        val previous = NetworkWallpaperHistoryStore(context.noBackupFilesDir).previous() ?: return null
+        if (!isPreviousUrlAllowed(previous.sourceUrl, apiBaseUrl, folder)) return null
+        return DownloadedWallpaper(
+            image = WallpaperImage(NETWORK_ALBUM_ID, previous.historyUri, previous.name),
+            historyUrl = previous.historyUri
+        )
+    }
+
+    internal fun isLegacyMutableHistoryUri(value: String): Boolean {
+        val url = value.toHttpUrlOrNull()
+        if (url != null) {
+            return url.pathSegments.lastOrNull() in setOf("current", "next", "random") &&
+                url.pathSegments.dropLast(1).lastOrNull() !in setOf("image", "thumb")
+        }
+        return value.startsWith("file:") &&
+            value.substringAfterLast('/') in setOf("wallpaper-latest", "wallpaper-previous")
+    }
+
+    internal fun normalizeHistoryEntry(entry: HistoryEntry): HistoryEntry =
+        if (isLegacyMutableHistoryUri(entry.imageUri)) {
+            entry.copy(
+                imageUri = "",
+                message = listOf(entry.message, "旧记录未保存固定图片，无法还原预览").filter(String::isNotBlank).joinToString("；")
+            )
+        } else entry
 
     suspend fun copyGalleryImageTo(
         fileName: String,
@@ -156,8 +182,21 @@ object NetworkWallpaperClient {
         imageUrl = imageUrl(fileName, apiBaseUrl)
     )
 
-    fun endpointUrl(mode: NetworkMode, apiBaseUrl: String = BASE_URL): String =
-        apiBaseUrl.toHttpUrl().newBuilder().addPathSegment(mode.endpoint).build().toString()
+    fun endpointUrl(mode: NetworkMode, apiBaseUrl: String = BASE_URL, folder: String? = null): String {
+        require(folder == null || mode == NetworkMode.RANDOM) { "只有随机模式支持指定网络相册" }
+        val builder = apiBaseUrl.toHttpUrl().newBuilder().addPathSegment(mode.endpoint)
+        if (folder != null) builder.addQueryParameter("folder", folder)
+        return builder.build().toString()
+    }
+
+    internal fun isPreviousUrlAllowed(previousUrl: String?, apiBaseUrl: String, folder: String?): Boolean {
+        val previous = previousUrl?.toHttpUrlOrNull() ?: return false
+        val base = apiBaseUrl.toHttpUrl()
+        if (previous.scheme != base.scheme || previous.host != base.host || previous.port != base.port ||
+            previous.username != base.username || previous.password != base.password ||
+            !previous.encodedPath.startsWith("${base.encodedPath.trimEnd('/')}/")) return false
+        return folder == null || previous.toString() == endpointUrl(NetworkMode.RANDOM, apiBaseUrl, folder)
+    }
 
     fun thumbnailUrl(fileName: String, apiBaseUrl: String = BASE_URL): String =
         galleryFileUrl("thumb", fileName, apiBaseUrl)
@@ -196,19 +235,11 @@ object NetworkWallpaperClient {
                 throw IOException("服务端返回的不是图片")
             }
             val body = response.body ?: throw IOException("服务端返回了空图片")
-            val destination = File(context.cacheDir, "wallpaper-latest")
-            val temporary = File(context.cacheDir, "wallpaper-latest.tmp")
-            body.byteStream().use { input ->
-                temporary.outputStream().use { output -> input.copyTo(output) }
-            }
-            if (!temporary.renameTo(destination)) {
-                temporary.copyTo(destination, overwrite = true)
-                temporary.delete()
-            }
-            if (destination.length() == 0L) throw IOException("下载的图片为空")
+            val snapshot = NetworkWallpaperHistoryStore(context.noBackupFilesDir)
+                .save(body.byteStream(), url, displayName)
             DownloadedWallpaper(
-                image = WallpaperImage(NETWORK_ALBUM_ID, destination.toUri().toString(), displayName),
-                historyUrl = url
+                image = WallpaperImage(NETWORK_ALBUM_ID, snapshot.historyUri, snapshot.name),
+                historyUrl = snapshot.historyUri
             )
         }
     }
@@ -227,4 +258,5 @@ object NetworkWallpaperClient {
         }
         return WallpaperHttpException(statusCode, message)
     }
+
 }

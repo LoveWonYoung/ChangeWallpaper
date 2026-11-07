@@ -72,11 +72,24 @@ class SettingsStore private constructor(private val context: Context) {
 
     suspend fun exportJson(): String = encode(read())
 
+    suspend fun pruneNetworkHistory() {
+        // Serialize cleanup with history edits so a stale reader cannot delete newer records.
+        context.wallpaperDataStore.edit { data ->
+            runCatching {
+                NetworkWallpaperHistoryStore(context.noBackupFilesDir)
+                    .prune(decode(data[settingsKey]).history.map { it.imageUri })
+            }
+        }
+    }
+
     private fun encode(settings: AppSettings): String = JSONObject().apply {
-        put("version", 7)
+        put("version", 12)
         put("source", settings.source.storedValue)
-        put("apiBaseUrl", settings.apiBaseUrl)
+        put("wifiApiBaseUrl", settings.wifiApiBaseUrl)
+        put("mobileApiBaseUrl", settings.mobileApiBaseUrl)
+        put("wifiSsid", settings.wifiSsid)
         put("networkMode", settings.networkMode.storedValue)
+        put("networkAlbumName", settings.networkAlbumName)
         put("galleryColumns", settings.galleryColumns)
         put("galleryRows", settings.galleryRows)
         put("albums", JSONArray().apply {
@@ -95,6 +108,16 @@ class SettingsStore private constructor(private val context: Context) {
         put("target", settings.target.storedValue)
         put("rotationMode", settings.rotationMode.storedValue)
         put("cropMode", settings.cropMode.storedValue)
+        put("cropFocuses", JSONObject().apply {
+            settings.cropFocuses.entries.toList().takeLast(MAX_CROP_FOCUSES).forEach { (key, focus) ->
+                put(key, JSONObject().apply {
+                    put("homeX", focus.home.x.toDouble())
+                    put("homeY", focus.home.y.toDouble())
+                    put("lockX", focus.lock.x.toDouble())
+                    put("lockY", focus.lock.y.toDouble())
+                })
+            }
+        })
         put("isEnabled", settings.isEnabled)
         put("indexes", JSONObject().apply { settings.indexes.forEach { (key, value) -> put(key, value) } })
         put("excludedUris", JSONArray(settings.excludedUris.toList()))
@@ -118,6 +141,7 @@ class SettingsStore private constructor(private val context: Context) {
         put("notificationsEnabled", settings.notificationsEnabled)
         put("themeMode", settings.themeMode.storedValue)
         put("accentStyle", settings.accentStyle.storedValue)
+        put("pausedUntilMillis", settings.pausedUntilMillis)
         put("lastError", settings.lastError)
     }.toString()
 
@@ -135,6 +159,20 @@ class SettingsStore private constructor(private val context: Context) {
             }
             val indexesJson = json.optJSONObject("indexes") ?: JSONObject()
             val indexes = indexesJson.keys().asSequence().associateWith { indexesJson.optInt(it, 0) }
+            val cropFocusesJson = json.optJSONObject("cropFocuses") ?: JSONObject()
+            val cropFocuses = cropFocusesJson.keys().asSequence().take(MAX_CROP_FOCUSES).mapNotNull { key ->
+                val item = cropFocusesJson.optJSONObject(key) ?: return@mapNotNull null
+                key to WallpaperCropFocus(
+                    home = CropFocus(
+                        item.optDouble("homeX", 0.5).toFloat(),
+                        item.optDouble("homeY", 0.5).toFloat()
+                    ).normalized(),
+                    lock = CropFocus(
+                        item.optDouble("lockX", 0.5).toFloat(),
+                        item.optDouble("lockY", 0.5).toFloat()
+                    ).normalized()
+                )
+            }.toMap()
             val interval = if (json.optInt("version", 0) < 4) {
                 5L
             } else {
@@ -148,10 +186,15 @@ class SettingsStore private constructor(private val context: Context) {
                 } else {
                     WallpaperSource.NETWORK
                 },
-                apiBaseUrl = NetworkWallpaperClient.normalizeBaseUrl(
-                    json.optString("apiBaseUrl", NetworkWallpaperClient.BASE_URL)
+                wifiApiBaseUrl = NetworkWallpaperClient.normalizeBaseUrl(
+                    json.optString("wifiApiBaseUrl", json.optString("apiBaseUrl", NetworkWallpaperClient.BASE_URL))
                 ) ?: NetworkWallpaperClient.BASE_URL,
+                mobileApiBaseUrl = NetworkWallpaperClient.normalizeBaseUrl(
+                    json.optString("mobileApiBaseUrl", json.optString("apiBaseUrl", NetworkWallpaperClient.BASE_URL))
+                ) ?: NetworkWallpaperClient.BASE_URL,
+                wifiSsid = json.optNullableString("wifiSsid"),
                 networkMode = NetworkMode.from(json.optString("networkMode")),
+                networkAlbumName = json.optNullableString("networkAlbumName"),
                 galleryColumns = json.optInt("galleryColumns", 3).coerceIn(2, 4),
                 galleryRows = json.optInt("galleryRows", 6).coerceIn(3, 8),
                 albums = albums,
@@ -161,6 +204,7 @@ class SettingsStore private constructor(private val context: Context) {
                 target = WallpaperTarget.from(json.optString("target")),
                 rotationMode = RotationMode.from(json.optString("rotationMode")),
                 cropMode = CropMode.from(json.optString("cropMode")),
+                cropFocuses = cropFocuses,
                 isEnabled = json.optBoolean("isEnabled", false),
                 indexes = indexes,
                 excludedUris = json.optJSONArray("excludedUris").toStringSet(),
@@ -173,7 +217,7 @@ class SettingsStore private constructor(private val context: Context) {
                         target = WallpaperTarget.from(item.optString("target")),
                         success = item.optBoolean("success"),
                         message = item.optString("message")
-                    )
+                    ).let(NetworkWallpaperClient::normalizeHistoryEntry)
                 },
                 activeHoursEnabled = json.optBoolean("activeHoursEnabled", false),
                 activeStartHour = json.optInt("activeStartHour", 8).coerceIn(0, 23),
@@ -182,6 +226,7 @@ class SettingsStore private constructor(private val context: Context) {
                 notificationsEnabled = json.optBoolean("notificationsEnabled", false),
                 themeMode = AppThemeMode.from(json.optString("themeMode")),
                 accentStyle = AccentStyle.from(json.optString("accentStyle")),
+                pausedUntilMillis = json.optLong("pausedUntilMillis", 0L).coerceAtLeast(0L),
                 lastError = json.optString("lastError")
             )
         } catch (exception: Exception) {
@@ -207,6 +252,7 @@ class SettingsStore private constructor(private val context: Context) {
 
     companion object {
         private const val MAX_HISTORY = 50
+        private const val MAX_CROP_FOCUSES = 500
 
         fun get(context: Context): SettingsStore = SettingsStore(context.applicationContext)
     }

@@ -121,18 +121,32 @@ object WallpaperRenderer {
         image: WallpaperImage,
         cropMode: CropMode,
         target: WallpaperTarget,
-        desktopProtectionEnabled: Boolean
+        desktopProtectionEnabled: Boolean,
+        cropFocus: WallpaperCropFocus = WallpaperCropFocus()
     ) = withContext(Dispatchers.IO) {
         DesktopWallpaperGuard.requireDesktop(context, desktopProtectionEnabled)
         val manager = WallpaperManager.getInstance(context)
         val targetSize = resolveTargetSize(context)
         val decoded = decodeSampled(context, image.uri.toUri(), targetSize.width, targetSize.height)
         try {
-            val rendered = render(decoded, targetSize.width, targetSize.height, cropMode)
-            try {
-                applyRendered(context, manager, rendered, target, desktopProtectionEnabled)
-            } finally {
-                if (rendered !== decoded) rendered.recycle()
+            val targets = if (target == WallpaperTarget.BOTH) {
+                listOf(WallpaperTarget.HOME, WallpaperTarget.LOCK)
+            } else {
+                listOf(target)
+            }
+            targets.forEach { currentTarget ->
+                val rendered = render(
+                    decoded,
+                    targetSize.width,
+                    targetSize.height,
+                    cropMode,
+                    cropFocus.forTarget(currentTarget)
+                )
+                try {
+                    applyRendered(context, manager, rendered, currentTarget, desktopProtectionEnabled)
+                } finally {
+                    if (rendered !== decoded) rendered.recycle()
+                }
             }
         } finally {
             if (!decoded.isRecycled) decoded.recycle()
@@ -148,15 +162,7 @@ object WallpaperRenderer {
     ) {
         val cropHint = Rect(0, 0, bitmap.width, bitmap.height)
         DesktopWallpaperGuard.requireDesktop(context, desktopProtectionEnabled)
-        if (target == WallpaperTarget.BOTH) {
-            manager.setBitmap(bitmap, cropHint, true, WallpaperManager.FLAG_SYSTEM)
-            DesktopWallpaperGuard.requireDesktop(context, desktopProtectionEnabled)
-            runCatching {
-                manager.setBitmap(bitmap, cropHint, true, WallpaperManager.FLAG_LOCK)
-            }
-        } else {
-            manager.setBitmap(bitmap, cropHint, true, target.toFlags())
-        }
+        manager.setBitmap(bitmap, cropHint, true, target.toFlags())
     }
 
     @Suppress("DEPRECATION")
@@ -252,7 +258,13 @@ object WallpaperRenderer {
         return sample
     }
 
-    internal fun render(source: Bitmap, width: Int, height: Int, mode: CropMode): Bitmap {
+    internal fun render(
+        source: Bitmap,
+        width: Int,
+        height: Int,
+        mode: CropMode,
+        focus: CropFocus = CropFocus()
+    ): Bitmap {
         val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -273,7 +285,7 @@ object WallpaperRenderer {
             darkness = if (mode == CropMode.BLUR) 55 else 20,
             paint = paint
         )
-        drawScaled(canvas, source, width, height, fill = shouldFill, paint = paint)
+        drawScaled(canvas, source, width, height, fill = shouldFill, paint = paint, focus = focus.normalized())
         return output
     }
 
@@ -325,7 +337,8 @@ object WallpaperRenderer {
         width: Int,
         height: Int,
         fill: Boolean,
-        paint: Paint
+        paint: Paint,
+        focus: CropFocus = CropFocus()
     ) {
         val scale = if (fill) {
             max(width.toFloat() / bitmap.width, height.toFloat() / bitmap.height)
@@ -334,9 +347,15 @@ object WallpaperRenderer {
         }
         val drawWidth = bitmap.width * scale
         val drawHeight = bitmap.height * scale
-        val left = (width - drawWidth) / 2f
-        val top = (height - drawHeight) / 2f
+        val left = if (fill) anchoredOffset(width.toFloat(), drawWidth, focus.x) else (width - drawWidth) / 2f
+        val top = if (fill) anchoredOffset(height.toFloat(), drawHeight, focus.y) else (height - drawHeight) / 2f
         canvas.drawBitmap(bitmap, null, RectF(left, top, left + drawWidth, top + drawHeight), paint)
+    }
+
+    internal fun anchoredOffset(containerSize: Float, contentSize: Float, focus: Float): Float = when {
+        focus <= 0f -> 0f
+        focus >= 1f -> containerSize - contentSize
+        else -> (containerSize - contentSize) * focus
     }
 
     private fun WallpaperTarget.toFlags(): Int = when (this) {
