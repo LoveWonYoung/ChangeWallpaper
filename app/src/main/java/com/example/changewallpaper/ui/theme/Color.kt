@@ -2,6 +2,22 @@ package com.example.changewallpaper.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
+val LavenderLightPrimary = Color(0xFF6C4AB6)
+val LavenderLightSecondary = Color(0xFF625B71)
+val LavenderLightTertiary = Color(0xFF825272)
+val LavenderLightContainer = Color(0xFFEDE7F6)
+val LavenderLightBackground = Color(0xFFFBF8FD)
+val LavenderLightSurface = Color(0xFFFFFFFF)
+val LavenderLightSurfaceVariant = Color(0xFFE8E2EE)
+
+val LavenderDarkPrimary = Color(0xFFD0BCFF)
+val LavenderDarkSecondary = Color(0xFFCCC2DC)
+val LavenderDarkTertiary = Color(0xFFF2B8D6)
+val LavenderDarkContainer = Color(0xFF53348A)
+val LavenderDarkBackground = Color(0xFF131019)
+val LavenderDarkSurface = Color(0xFF1D1826)
+val LavenderDarkSurfaceVariant = Color(0xFF494354)
+
 val ForestLightPrimary = Color(0xFF276B52)
 val ForestLightSecondary = Color(0xFF52665B)
 val ForestLightTertiary = Color(0xFF3F6878)

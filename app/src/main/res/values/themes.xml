@@ -6,6 +6,6 @@
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:colorAccent">#52634F</item>
+        <item name="android:colorAccent">#6C4AB6</item>
     </style>
 </resources>

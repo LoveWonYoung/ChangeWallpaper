@@ -214,23 +214,34 @@ private fun WallpaperApp(uiState: WallpaperUiState, viewModel: WallpaperViewMode
                         Modifier
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.background)
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
                     ) {
-                        NavigationBar(
-                            modifier = Modifier.clip(RoundedCornerShape(28.dp)),
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            tonalElevation = 0.dp
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(32.dp),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                            shadowElevation = 4.dp,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
                         ) {
-                            AppPage.entries.forEach { destination ->
-                                NavigationBarItem(
-                                    selected = page == destination,
-                                    onClick = { page = destination },
-                                    icon = { Icon(painterResource(destination.icon), contentDescription = null) },
-                                    label = { Text(destination.label) },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                            NavigationBar(
+                                modifier = Modifier.clip(RoundedCornerShape(32.dp)),
+                                containerColor = Color.Transparent,
+                                tonalElevation = 0.dp
+                            ) {
+                                AppPage.entries.forEach { destination ->
+                                    val isSelected = page == destination
+                                    NavigationBarItem(
+                                        selected = isSelected,
+                                        onClick = { page = destination },
+                                        icon = { Icon(painterResource(destination.icon), contentDescription = null) },
+                                        label = { Text(destination.label, fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal) },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                                            selectedTextColor = MaterialTheme.colorScheme.primary
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
                     }
@@ -242,8 +253,8 @@ private fun WallpaperApp(uiState: WallpaperUiState, viewModel: WallpaperViewMode
                         .background(
                             Brush.verticalGradient(
                                 listOf(
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
-                                    MaterialTheme.colorScheme.background.copy(alpha = 0.96f),
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                                    MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
                                     MaterialTheme.colorScheme.background,
                                     MaterialTheme.colorScheme.background
                                 )
@@ -716,10 +727,10 @@ private fun AlbumCard(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { image ->
                     val excluded = image.uri in settings.excludedUris
-                    Box(Modifier.weight(1f).aspectRatio(0.62f).clip(RoundedCornerShape(14.dp)).clickable { onOpen(image) }) {
+                    Box(Modifier.weight(1f).aspectRatio(0.62f).clip(RoundedCornerShape(16.dp)).clickable { onOpen(image) }) {
                         GalleryImage(image.uri, image.name, Modifier.fillMaxSize().alpha(if (excluded) 0.5f else 1f))
-                        if (excluded) Surface(Modifier.align(Alignment.BottomCenter).padding(6.dp), color = MaterialTheme.colorScheme.surface,
-                            shape = RoundedCornerShape(8.dp)) { Text("已排除", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall) }
+                        if (excluded) Surface(Modifier.align(Alignment.BottomCenter).padding(6.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            shape = RoundedCornerShape(10.dp)) { Text("已排除", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall) }
                     }
                 }
                 repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
@@ -751,16 +762,16 @@ private fun HistoryPage(settings: AppSettings, viewModel: WallpaperViewModel) {
         }
         items(settings.history) { entry ->
             Card(
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(22.dp),
                 border = BorderStroke(
                     1.dp,
-                    if (entry.success) MaterialTheme.colorScheme.outlineVariant
-                    else MaterialTheme.colorScheme.error.copy(alpha = 0.22f)
+                    if (entry.success) MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    else MaterialTheme.colorScheme.error.copy(alpha = 0.3f)
                 ),
                 colors = CardDefaults.cardColors(
-                    containerColor = if (entry.success) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.errorContainer
+                    containerColor = if (entry.success) MaterialTheme.colorScheme.surface.copy(alpha = 0.96f) else MaterialTheme.colorScheme.errorContainer
                 ),
-                elevation = CardDefaults.cardElevation(0.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (entry.imageUri.isNotBlank()) {
@@ -1212,14 +1223,32 @@ private fun SettingSwitch(label: String, checked: Boolean, onChecked: (Boolean) 
 private fun SectionCard(title: String, content: @Composable () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)),
-        elevation = CardDefaults.cardElevation(0.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f))
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp, pressedElevation = 4.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
     ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(14.dp))
+        Column(Modifier.padding(20.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 4.dp, height = 18.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.primary,
+                                    MaterialTheme.colorScheme.tertiary
+                                )
+                            )
+                        )
+                )
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(16.dp))
             content()
         }
     }
@@ -1228,83 +1257,95 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
 @Composable
 private fun AppHeader(settings: AppSettings) {
     val latest = settings.history.firstOrNull { it.success }
-    Box(
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(220.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(
-                Brush.linearGradient(
-                    listOf(
-                        MaterialTheme.colorScheme.primary,
-                        MaterialTheme.colorScheme.tertiary
-                    )
-                )
-            )
+            .height(230.dp),
+        shape = RoundedCornerShape(26.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
     ) {
-        latest?.takeIf { it.imageUri.isNotBlank() }?.let { entry ->
-            AsyncImage(
-                model = entry.imageUri.toUri(),
-                contentDescription = entry.imageName,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
         Box(
-            Modifier
+            modifier = Modifier
                 .fillMaxSize()
                 .background(
-                    Brush.verticalGradient(
+                    Brush.linearGradient(
                         listOf(
-                            Color.Black.copy(alpha = if (latest == null) 0.04f else 0.30f),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = if (latest == null) 0.20f else 0.78f)
+                            MaterialTheme.colorScheme.primary,
+                            MaterialTheme.colorScheme.tertiary
                         )
                     )
                 )
-        )
-        Column(Modifier.fillMaxSize().padding(22.dp)) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(Color.Black.copy(alpha = 0.24f))
-                    .padding(horizontal = 11.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(if (settings.isEnabled) Color(0xFFB8F5C8) else Color.White.copy(alpha = 0.62f))
-                )
-                Spacer(Modifier.width(7.dp))
-                Text(
-                    if (settings.isEnabled) "自动轮播中" else "等待开启",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelLarge
+        ) {
+            latest?.takeIf { it.imageUri.isNotBlank() }?.let { entry ->
+                AsyncImage(
+                    model = entry.imageUri.toUri(),
+                    contentDescription = entry.imageName,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
                 )
             }
-            Spacer(Modifier.weight(1f))
-            Text(
-                if (latest == null) "你的自然画廊" else "你的壁纸",
-                color = Color.White.copy(alpha = 0.76f),
-                style = MaterialTheme.typography.labelLarge
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Black.copy(alpha = if (latest == null) 0.08f else 0.32f),
+                                Color.Transparent,
+                                Color.Black.copy(alpha = if (latest == null) 0.35f else 0.82f)
+                            )
+                        )
+                    )
             )
-            Spacer(Modifier.height(5.dp))
-            Text(
-                if (latest == null) "让喜欢的风景常在" else "上次使用的壁纸",
-                style = MaterialTheme.typography.headlineMedium,
-                color = Color.White,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(Modifier.height(7.dp))
-            Text(
-                latest?.let { "${formatTime(it.timestamp)} · ${targetLabel(it.target)}" }
-                    ?: if (settings.isEnabled) "每一次点亮，都遇见一幅新风景。" else "开启轮播，让喜欢的图片自然出现。",
-                color = Color.White.copy(alpha = 0.82f),
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Column(Modifier.fillMaxSize().padding(22.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(99.dp),
+                    color = Color.Black.copy(alpha = 0.32f),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(if (settings.isEnabled) Color(0xFFB8F5C8) else Color.White.copy(alpha = 0.65f))
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (settings.isEnabled) "自动轮播中" else "等待开启",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (latest == null) "你的自然画廊" else "你的壁纸",
+                    color = Color.White.copy(alpha = 0.82f),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (latest == null) "让喜欢的风景常在" else "上次使用的壁纸",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    latest?.let { "${formatTime(it.timestamp)} · ${targetLabel(it.target)}" }
+                        ?: if (settings.isEnabled) "每一次点亮，都遇见一幅新风景。" else "开启轮播，让喜欢的图片自然出现。",
+                    color = Color.White.copy(alpha = 0.85f),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
     }
 }
@@ -1312,9 +1353,9 @@ private fun AppHeader(settings: AppSettings) {
 @Composable
 private fun PageTitle(title: String, subtitle: String) {
     Column {
-        Text(title, style = MaterialTheme.typography.headlineMedium)
+        Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
-        Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
     }
 }
 

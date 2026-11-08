@@ -2,6 +2,7 @@ package com.example.changewallpaper
 
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -18,6 +19,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -28,6 +30,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -339,24 +342,63 @@ internal fun adaptiveGalleryColumns(width: Dp, preferredColumns: Int): Int {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun AccentPicker(selected: AccentStyle, onSelected: (AccentStyle) -> Unit) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         AccentStyle.entries.forEach { style ->
             val color = when (style) {
+                AccentStyle.LAVENDER -> Color(0xFF6C4AB6)
                 AccentStyle.FOREST -> Color(0xFF41694E)
                 AccentStyle.OCEAN -> Color(0xFF3D668C)
                 AccentStyle.SUNSET -> Color(0xFFAD6651)
                 AccentStyle.DYNAMIC -> MaterialTheme.colorScheme.primary
             }
-            Column(Modifier.width(64.dp).selectable(selected == style, role = Role.RadioButton, onClick = { onSelected(style) }).padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.size(40.dp).border(if (selected == style) 2.dp else 0.dp,
-                    if (selected == style) MaterialTheme.colorScheme.onSurface else Color.Transparent, CircleShape).padding(5.dp).clip(CircleShape).background(color),
-                    contentAlignment = Alignment.Center) {
-                    if (selected == style) Box(Modifier.size(8.dp).clip(CircleShape).background(Color.White))
+            val label = when (style) {
+                AccentStyle.LAVENDER -> "薰衣草"
+                AccentStyle.FOREST -> "森林"
+                AccentStyle.OCEAN -> "海洋"
+                AccentStyle.SUNSET -> "落日"
+                AccentStyle.DYNAMIC -> "系统"
+            }
+            val isSelected = selected == style
+            Surface(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .selectable(isSelected, role = Role.RadioButton, onClick = { onSelected(style) }),
+                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                border = BorderStroke(
+                    width = if (isSelected) 1.5.dp else 1.dp,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        Modifier
+                            .size(34.dp)
+                            .shadow(if (isSelected) 3.dp else 0.dp, CircleShape)
+                            .clip(CircleShape)
+                            .background(color),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isSelected) {
+                            Box(
+                                Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                    )
                 }
-                Spacer(Modifier.height(6.dp))
-                Text(when (style) { AccentStyle.FOREST -> "森林"; AccentStyle.OCEAN -> "海洋"; AccentStyle.SUNSET -> "落日"; AccentStyle.DYNAMIC -> "系统" },
-                    style = MaterialTheme.typography.labelMedium)
             }
         }
     }
@@ -369,6 +411,7 @@ internal fun HourPickerDialog(title: String, initialHour: Int, onDismiss: () -> 
     val listState = androidx.compose.foundation.lazy.rememberLazyListState(initialFirstVisibleItemIndex = (initialHour - 2).coerceAtLeast(0))
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
         title = { Text(title) },
         text = {
             Column {

@@ -19,7 +19,7 @@ import com.example.changewallpaper.AppThemeMode
 @Composable
 fun ChangeWallpaperTheme(
     themeMode: AppThemeMode = AppThemeMode.SYSTEM,
-    accentStyle: AccentStyle = AccentStyle.FOREST,
+    accentStyle: AccentStyle = AccentStyle.LAVENDER,
     content: @Composable () -> Unit
 ) {
     val dark = when (themeMode) {
@@ -31,6 +31,40 @@ fun ChangeWallpaperTheme(
     val scheme = when {
         accentStyle == AccentStyle.DYNAMIC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
             if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        accentStyle == AccentStyle.LAVENDER && dark -> darkColorScheme(
+            primary = LavenderDarkPrimary,
+            onPrimary = Color(0xFF381E72),
+            primaryContainer = LavenderDarkContainer,
+            onPrimaryContainer = Color(0xFFEADDFF),
+            secondary = LavenderDarkSecondary,
+            onSecondary = Color(0xFF332D41),
+            secondaryContainer = Color(0xFF4A4458),
+            onSecondaryContainer = Color(0xFFE8DEF8),
+            tertiary = LavenderDarkTertiary,
+            tertiaryContainer = Color(0xFF633B58),
+            background = LavenderDarkBackground,
+            surface = LavenderDarkSurface,
+            surfaceVariant = LavenderDarkSurfaceVariant,
+            outline = Color(0xFF948F9E),
+            outlineVariant = Color(0xFF494452)
+        )
+        accentStyle == AccentStyle.LAVENDER -> lightColorScheme(
+            primary = LavenderLightPrimary,
+            onPrimary = Color.White,
+            primaryContainer = LavenderLightContainer,
+            onPrimaryContainer = Color(0xFF260058),
+            secondary = LavenderLightSecondary,
+            onSecondary = Color.White,
+            secondaryContainer = Color(0xFFE8DEF8),
+            onSecondaryContainer = Color(0xFF1E192B),
+            tertiary = LavenderLightTertiary,
+            tertiaryContainer = Color(0xFFFFD8E7),
+            background = LavenderLightBackground,
+            surface = LavenderLightSurface,
+            surfaceVariant = LavenderLightSurfaceVariant,
+            outline = Color(0xFF7A7584),
+            outlineVariant = Color(0xFFCBC4D3)
+        )
         accentStyle == AccentStyle.OCEAN && dark -> darkColorScheme(
             primary = OceanDarkPrimary,
             secondary = Color(0xFFB7C9D7),
@@ -67,7 +101,7 @@ fun ChangeWallpaperTheme(
             surface = GalleryLightSurface,
             surfaceVariant = GalleryLightSurfaceVariant
         )
-        dark -> darkColorScheme(
+        accentStyle == AccentStyle.FOREST && dark -> darkColorScheme(
             primary = ForestDarkPrimary,
             secondary = ForestDarkSecondary,
             tertiary = Color(0xFFA0CED3),
@@ -76,7 +110,7 @@ fun ChangeWallpaperTheme(
             surface = GalleryDarkSurface,
             surfaceVariant = GalleryDarkSurfaceVariant
         )
-        else -> lightColorScheme(
+        accentStyle == AccentStyle.FOREST -> lightColorScheme(
             primary = ForestLightPrimary,
             secondary = ForestLightSecondary,
             tertiary = ForestLightTertiary,
@@ -84,6 +118,24 @@ fun ChangeWallpaperTheme(
             background = GalleryLightBackground,
             surface = GalleryLightSurface,
             surfaceVariant = GalleryLightSurfaceVariant
+        )
+        dark -> darkColorScheme(
+            primary = LavenderDarkPrimary,
+            secondary = LavenderDarkSecondary,
+            tertiary = LavenderDarkTertiary,
+            primaryContainer = LavenderDarkContainer,
+            background = LavenderDarkBackground,
+            surface = LavenderDarkSurface,
+            surfaceVariant = LavenderDarkSurfaceVariant
+        )
+        else -> lightColorScheme(
+            primary = LavenderLightPrimary,
+            secondary = LavenderLightSecondary,
+            tertiary = LavenderLightTertiary,
+            primaryContainer = LavenderLightContainer,
+            background = LavenderLightBackground,
+            surface = LavenderLightSurface,
+            surfaceVariant = LavenderLightSurfaceVariant
         )
     }
     MaterialTheme(
@@ -95,9 +147,9 @@ fun ChangeWallpaperTheme(
 }
 
 private val GalleryShapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(18.dp),
-    large = RoundedCornerShape(26.dp),
-    extraLarge = RoundedCornerShape(34.dp)
+    extraSmall = RoundedCornerShape(10.dp),
+    small = RoundedCornerShape(16.dp),
+    medium = RoundedCornerShape(22.dp),
+    large = RoundedCornerShape(30.dp),
+    extraLarge = RoundedCornerShape(38.dp)
 )

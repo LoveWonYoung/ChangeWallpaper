@@ -49,10 +49,10 @@ enum class AppThemeMode(val storedValue: String) {
 }
 
 enum class AccentStyle(val storedValue: String) {
-    FOREST("forest"), OCEAN("ocean"), SUNSET("sunset"), DYNAMIC("dynamic");
+    LAVENDER("lavender"), FOREST("forest"), OCEAN("ocean"), SUNSET("sunset"), DYNAMIC("dynamic");
 
     companion object {
-        fun from(value: String?): AccentStyle = entries.firstOrNull { it.storedValue == value } ?: FOREST
+        fun from(value: String?): AccentStyle = entries.firstOrNull { it.storedValue == value } ?: LAVENDER
     }
 }
 
@@ -179,7 +179,7 @@ data class AppSettings(
     val desktopProtectionEnabled: Boolean = false,
     val notificationsEnabled: Boolean = false,
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
-    val accentStyle: AccentStyle = AccentStyle.FOREST,
+    val accentStyle: AccentStyle = AccentStyle.LAVENDER,
     val pausedUntilMillis: Long = 0L,
     val lastError: String = ""
 ) {
